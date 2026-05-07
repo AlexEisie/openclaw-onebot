@@ -85,7 +85,7 @@ export function resolveOneBotAccount(
   }
 
   const allowFrom = accountConfig.allowFrom;
-  const groupAutoReact = accountConfig.groupAutoReact !== false;
+  const groupAutoReact = accountConfig.groupAutoReact === true;
   const groupAutoReactEmojiId = accountConfig.groupAutoReactEmojiId ?? 1;
 
   return {
