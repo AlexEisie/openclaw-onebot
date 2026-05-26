@@ -1,6 +1,6 @@
 ---
 name: openclaw-onebot
-description: "OneBot 11 channel plugin for QQ messaging (NapCat/go-cqhttp). Native OpenClaw integration with private/group chat, opt-in group reactions, block streaming, voice pipeline, message batching, allowFrom filtering, shared-dir media staging, and authorized text-command passthrough. 122 tests."
+description: "OneBot 11 channel plugin for QQ messaging (NapCat/go-cqhttp). Native OpenClaw integration with private/group chat, opt-in group reactions, block streaming, voice pipeline, message batching, allowFrom filtering, shared-dir media staging, and authorized text-command passthrough. 123 tests."
 metadata:
   openclaw:
     emoji: "🐧"
@@ -48,7 +48,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🔒 可选 access token 鉴权
 - 🎯 `allowFrom` 消息来源过滤（私聊/群聊/用户级别）
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
-- ✅ 122 个测试用例全部通过
+- ✅ 123 个测试用例全部通过
 - 📈 覆盖率可通过 `npm run coverage` 复核
 
 ### 快速开始
@@ -240,7 +240,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ```bash
 npm install
-npm test          # 122 tests
+npm test          # 123 tests
 npm run build     # 编译 TypeScript
 npm run coverage  # 覆盖率报告
 npm run sync:openclaw-cli  # 审查后重新同步 OpenClaw CLI 的 shared-dir 参数
@@ -278,7 +278,7 @@ Note:
 - 🔒 Optional access token authentication
 - 🎯 `allowFrom` filtering (private/group/user-level)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
-- ✅ 122 tests passing
+- ✅ 123 tests passing
 - 📈 Coverage can be re-generated with `npm run coverage`
 
 ### Quick Start
@@ -471,7 +471,7 @@ Skip these if you only need text and image delivery.
 
 ```bash
 npm install
-npm test          # Run 122 tests
+npm test          # Run 123 tests
 npm run build     # Compile TypeScript
 npm run coverage  # Coverage report
 npm run sync:openclaw-cli  # Re-apply shared-dir CLI wiring after review

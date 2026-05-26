@@ -69,6 +69,31 @@ export function isMentioningSelf(event: OneBotMessageEvent): boolean {
   );
 }
 
+export async function withSessionLock<T>(
+  locks: Map<string, Promise<void>>,
+  sessionKey: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = locks.get(sessionKey) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const next = previous.catch(() => undefined).then(() => current);
+  locks.set(sessionKey, next);
+
+  await previous.catch(() => undefined);
+
+  try {
+    return await task();
+  } finally {
+    release();
+    if (locks.get(sessionKey) === next) {
+      locks.delete(sessionKey);
+    }
+  }
+}
+
 // ── Message batching ──
 
 interface BufferedMessage {
@@ -130,6 +155,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
   // Per-chat message batch buffers
   const chatBatches = new Map<string, ChatBatch>();
+  const sessionLocks = new Map<string, Promise<void>>();
 
   abortSignal.addEventListener("abort", () => {
     isAborted = true;
@@ -142,6 +168,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       clearTimeout(batch.timer);
       chatBatches.delete(key);
     }
+    sessionLocks.clear();
     cleanup();
   });
 
@@ -208,7 +235,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
       // ── Dispatch a (possibly batched) set of messages ──
 
-      const dispatchMessages = async (batchKey: string, messages: BufferedMessage[]) => {
+      const dispatchMessagesUnlocked = async (batchKey: string, messages: BufferedMessage[]) => {
         if (messages.length === 0) return;
 
         const first = messages[0];
@@ -343,7 +370,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           const messagesConfig = pluginRuntime.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId);
 
           let hasResponse = false;
-          const responseTimeout = 90000;
+          const responseTimeout = 18000;
           let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
           const timeoutPromise = new Promise<void>((_, reject) => {
@@ -446,6 +473,21 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       };
 
       // ── Buffer an incoming message and debounce dispatch ──
+
+      const dispatchMessages = async (batchKey: string, messages: BufferedMessage[]) => {
+        if (messages.length === 0) return;
+
+        const event = messages[0].event;
+        const sessionKey = event.message_type === "group"
+          ? `group:${event.group_id}`
+          : `private:${event.user_id}`;
+
+        if (sessionLocks.has(sessionKey)) {
+          log?.debug?.(`[onebot:${account.accountId}] Waiting for session lock: ${sessionKey}`);
+        }
+
+        await withSessionLock(sessionLocks, sessionKey, () => dispatchMessagesUnlocked(batchKey, messages));
+      };
 
       const bufferMessage = (event: OneBotMessageEvent) => {
         const isGroup = event.message_type === "group";

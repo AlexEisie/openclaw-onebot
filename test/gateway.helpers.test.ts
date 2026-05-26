@@ -14,6 +14,7 @@ import {
   isSilkFormat,
   processVoiceSegments,
   resolveInboundCommandAuthorization,
+  withSessionLock,
 } from '../src/gateway.js';
 
 describe('gateway helpers', () => {
@@ -220,5 +221,41 @@ describe('gateway helpers', () => {
       allowFrom: undefined,
       peerId: 'private:100',
     })).toBe(false);
+  });
+
+  it('serializes work for the same session key only', async () => {
+    const locks = new Map<string, Promise<void>>();
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+
+    const first = withSessionLock(locks, 'session:a', async () => {
+      events.push('a1:start');
+      await new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      events.push('a1:end');
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(['a1:start']);
+    });
+
+    const second = withSessionLock(locks, 'session:a', async () => {
+      events.push('a2:start');
+    });
+
+    const other = withSessionLock(locks, 'session:b', async () => {
+      events.push('b:start');
+    });
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(['a1:start', 'b:start']);
+    });
+
+    releaseFirst();
+    await Promise.all([first, second, other]);
+
+    expect(events).toEqual(['a1:start', 'b:start', 'a1:end', 'a2:start']);
+    expect(locks.size).toBe(0);
   });
 });
