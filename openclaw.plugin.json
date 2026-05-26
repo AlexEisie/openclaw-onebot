@@ -72,6 +72,11 @@
               { "type": "string" }
             ]
           },
+          "groupRequireMention": {
+            "type": "boolean",
+            "default": true,
+            "description": "Only process inbound group messages that @ mention this bot"
+          },
           "configWrites": {
             "type": "boolean",
             "description": "Allow channel-initiated config writes"
@@ -209,6 +214,11 @@
                   { "type": "integer" },
                   { "type": "string" }
                 ]
+              },
+              "groupRequireMention": {
+                "type": "boolean",
+                "default": true,
+                "description": "Only process inbound group messages that @ mention this bot"
               },
               "configWrites": { "type": "boolean" },
               "commands": { "$ref": "#/$defs/commands" },

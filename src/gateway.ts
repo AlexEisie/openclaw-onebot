@@ -62,6 +62,13 @@ export function extractRecordSegments(segments: OneBotMessageSegment[]): OneBotM
   return segments.filter((seg) => seg.type === "record");
 }
 
+export function isMentioningSelf(event: OneBotMessageEvent): boolean {
+  const selfId = String(event.self_id);
+  return event.message.some((segment) =>
+    segment.type === "at" && String(segment.data.qq ?? "") === selfId
+  );
+}
+
 // ── Message batching ──
 
 interface BufferedMessage {
@@ -459,6 +466,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         // Skip own messages
         if (event.user_id === event.self_id) return;
+
+        if (isGroup && account.groupRequireMention !== false && !isMentioningSelf(event)) {
+          log?.debug?.(`[onebot:${account.accountId}] Ignoring group message without @ mention from group:${event.group_id}`);
+          return;
+        }
 
         log?.info(
           `[onebot:${account.accountId}] ${isGroup ? "Group" : "Private"} message from ${senderName}(${senderId}) msg=${event.message_id}: ${text.slice(0, 100)}`,

@@ -20,6 +20,8 @@ export interface OneBotAccountConfig {
   groupAutoReact?: boolean;
   /** QQ/NapCat emoji id used for automatic group reactions */
   groupAutoReactEmojiId?: string | number;
+  /** Only process group messages that mention this bot (enabled by default) */
+  groupRequireMention?: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ export interface ResolvedOneBotAccount {
   allowFrom?: string[];
   groupAutoReact: boolean;
   groupAutoReactEmojiId: string | number;
+  groupRequireMention: boolean;
   config: OneBotAccountConfig;
 }
 

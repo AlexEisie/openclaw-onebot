@@ -165,9 +165,10 @@ describe('config', () => {
     const acct = resolveOneBotAccount(cfg as any, 'default');
     expect(acct.groupAutoReact).toBe(false);
     expect(acct.groupAutoReactEmojiId).toBe(1);
+    expect(acct.groupRequireMention).toBe(true);
   });
 
-  it('resolveOneBotAccount: groupAutoReact config is passed through', () => {
+  it('resolveOneBotAccount: group message config is passed through', () => {
     const cfg = {
       channels: {
         onebot: {
@@ -175,11 +176,13 @@ describe('config', () => {
           httpUrl: 'http://y',
           groupAutoReact: false,
           groupAutoReactEmojiId: 66,
+          groupRequireMention: false,
         },
       },
     };
     const acct = resolveOneBotAccount(cfg as any, 'default');
     expect(acct.groupAutoReact).toBe(false);
     expect(acct.groupAutoReactEmojiId).toBe(66);
+    expect(acct.groupRequireMention).toBe(false);
   });
 });

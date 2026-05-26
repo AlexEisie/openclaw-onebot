@@ -34,8 +34,9 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🔄 WebSocket 自动重连（指数退避）
 - 🔒 可选 access token 鉴权
 - 🎯 `allowFrom` 消息来源过滤（私聊/群聊/用户级别）
+- 📣 群聊默认仅响应 @ 机器人的消息，可用 `groupRequireMention` 关闭
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
-- ✅ 120 个测试用例全部通过
+- ✅ 122 个测试用例全部通过
 - 📈 覆盖率可通过 `npm run coverage` 复核
 
 ### 架构
@@ -100,7 +101,8 @@ openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin
       "containerSharedDir": "/shared",
       "allowFrom": ["private:12345"],
       "groupAutoReact": false,
-      "groupAutoReactEmojiId": 1
+      "groupAutoReactEmojiId": 1,
+      "groupRequireMention": true
     }
   }
 }
@@ -109,6 +111,7 @@ openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin
 说明：
 - 插件配置键使用 `openclaw-onebot`
 - 通道配置键使用 `channels.onebot`
+- 群聊默认只响应 @ 机器人的消息；如需接收所有群消息，可设置 `groupRequireMention: false`
 - 强烈建议配置 `allowFrom` 为可信 QQ 私聊或群聊；不配置时普通消息仍可进入通道，但 `/status`、`/model` 等 OpenClaw 文本命令不会被授权
 - `accessToken` 应使用强随机值，并只把 OneBot HTTP/WebSocket 端点暴露给本机或可信网络
 - `sharedDir` 建议使用专用目录，不要与下载、桌面、文档等私人文件目录混用
@@ -147,7 +150,8 @@ openclaw gateway restart
       "containerSharedDir": "/shared",
       "allowFrom": ["private:12345", "group:67890"],
       "groupAutoReact": false,
-      "groupAutoReactEmojiId": 1
+      "groupAutoReactEmojiId": 1,
+      "groupRequireMention": true
     }
   }
 }
@@ -161,6 +165,7 @@ openclaw gateway restart
 | `containerSharedDir` | 容器内共享目录；默认 `/shared`，与 `sharedDir` 对应 |
 | `groupAutoReact` | 是否对入站群消息自动添加 reaction，默认 `false` |
 | `groupAutoReactEmojiId` | 群聊自动 reaction 使用的 QQ emoji id，默认 `1` |
+| `groupRequireMention` | 群聊是否只处理 @ 机器人的消息，默认 `true` |
 
 ### Reaction 与流式回复
 
@@ -265,7 +270,7 @@ services:
 
 ```bash
 npm install
-npm test          # 120 tests
+npm test          # 122 tests
 npm run build     # 编译 TypeScript
 npm run coverage  # 覆盖率报告
 npm run sync:openclaw-cli  # 审查后重新同步 OpenClaw CLI 的 shared-dir 参数
@@ -317,9 +322,10 @@ Note:
 - 🔄 WebSocket auto-reconnect with exponential backoff
 - 🔒 Optional access token authentication
 - 🎯 `allowFrom` filtering (private/group/user-level)
+- 📣 Group chats only respond to @ mentions by default; set `groupRequireMention` to `false` to receive all group messages
 - 🧭 OpenClaw text-command support for authorized senders (`/status`, `/help`, `/commands`, `/model`, `/new`, `/reset`, etc.)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
-- ✅ 120 tests passing
+- ✅ 122 tests passing
 - 📈 Coverage can be re-generated with `npm run coverage`
 
 ### Quick Start
@@ -364,7 +370,8 @@ Add to `openclaw.json`:
       "containerSharedDir": "/shared",
       "allowFrom": ["private:12345"],
       "groupAutoReact": false,
-      "groupAutoReactEmojiId": 1
+      "groupAutoReactEmojiId": 1,
+      "groupRequireMention": true
     }
   }
 }
@@ -373,6 +380,7 @@ Add to `openclaw.json`:
 Notes:
 - Use `openclaw-onebot` for plugin config keys
 - Keep runtime channel config under `channels.onebot`
+- Group chats only respond to @ mentions by default; set `groupRequireMention: false` to receive every group message
 - Configure `allowFrom` to trusted QQ private users or groups. Without it, normal messages can still be routed, but OpenClaw text commands such as `/status` and `/model` are not authorized
 - Use a strong `accessToken` and keep OneBot HTTP/WebSocket endpoints on localhost or a trusted network
 - Use a dedicated `sharedDir`; do not point it at unrelated private files
@@ -478,6 +486,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 | `containerSharedDir` | Container-side mount path; defaults to `/shared` and should map to `sharedDir` |
 | `groupAutoReact` | Whether to auto-react to inbound group messages; defaults to `false` |
 | `groupAutoReactEmojiId` | QQ emoji id used for automatic group reactions; defaults to `1` |
+| `groupRequireMention` | Whether group chats only process messages that @ mention this bot; defaults to `true` |
 
 ### Target Format
 
@@ -489,7 +498,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ```bash
 npm install
-npm test          # Run 120 tests
+npm test          # Run 122 tests
 npm run build     # Compile TypeScript
 npm run coverage  # Coverage report
 npm run sync:openclaw-cli  # Re-apply shared-dir CLI wiring after review

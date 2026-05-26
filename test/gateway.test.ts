@@ -308,6 +308,7 @@ describe('gateway', () => {
         httpUrl: 'http://x',
         groupAutoReact: true,
         groupAutoReactEmojiId: 1,
+        groupRequireMention: false,
         config: {},
       },
       abortSignal: ac.signal,
@@ -346,6 +347,77 @@ describe('gateway', () => {
     await wsServer.close();
   });
 
+  it('requires @ mention for group messages by default', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: () => {}, error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 116,
+      user_id: 227,
+      group_id: 999003,
+      message: [{ type: 'text', data: { text: 'not for bot' } }],
+      raw_message: 'not for bot',
+      sender: { user_id: 227, nickname: 'QuietGroupUser', role: 'member' },
+      self_id: 999,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await new Promise((r) => setTimeout(r, 2500));
+    expect(runtimeState.state.lastDispatchArgs).toBeNull();
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 117,
+      user_id: 228,
+      group_id: 999003,
+      message: [
+        { type: 'at', data: { qq: '999' } },
+        { type: 'text', data: { text: 'hello bot' } },
+      ],
+      raw_message: '[CQ:at,qq=999] hello bot',
+      sender: { user_id: 228, nickname: 'MentionGroupUser', role: 'member' },
+      self_id: 999,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastDispatchArgs).not.toBeNull();
+    }, WAIT_FOR_BATCH);
+
+    expect(runtimeState.state.lastDispatchArgs.ctx.From).toBe('onebot:group:999003');
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+  });
+
   it('can disable automatic group reactions via config', async () => {
     const wsServer = await startMockOneBotWsServer();
     const ac = new AbortController();
@@ -362,6 +434,7 @@ describe('gateway', () => {
         httpUrl: 'http://x',
         groupAutoReact: false,
         groupAutoReactEmojiId: 1,
+        groupRequireMention: false,
         config: {},
       },
       abortSignal: ac.signal,

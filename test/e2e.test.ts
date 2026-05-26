@@ -109,7 +109,10 @@ describe('e2e', () => {
       message_id: 2002,
       user_id: 3002,
       group_id: 4002,
-      message: [{ type: 'text', data: { text: 'hey group' } }],
+      message: [
+        { type: 'at', data: { qq: 999 } },
+        { type: 'text', data: { text: 'hey group' } },
+      ],
       raw_message: 'hey group',
       sender: { user_id: 3002, nickname: 'GroupUser' },
       self_id: 999,
