@@ -38,7 +38,10 @@ function makeGroupMsg(userId: number, groupId: number, text: string) {
     message_id: Math.floor(Math.random() * 100000),
     user_id: userId,
     group_id: groupId,
-    message: [{ type: 'text', data: { text } }],
+    message: [
+      { type: 'at', data: { qq: 999 } },
+      { type: 'text', data: { text } },
+    ],
     raw_message: text,
     sender: { user_id: userId, nickname: `User${userId}` },
     self_id: 999,

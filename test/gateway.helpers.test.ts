@@ -10,6 +10,7 @@ import {
   extractRecordSegments,
   extractText,
   isAmrFormat,
+  isMentioningSelf,
   isSilkFormat,
   processVoiceSegments,
   resolveInboundCommandAuthorization,
@@ -45,6 +46,31 @@ describe('gateway helpers', () => {
       'fallback.png',
     ]);
     expect(extractRecordSegments(segments)).toHaveLength(1);
+  });
+
+  it('detects whether a group message mentions the bot account', () => {
+    const baseEvent = {
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 1,
+      user_id: 42,
+      group_id: 100,
+      raw_message: '',
+      sender: { user_id: 42 },
+      self_id: 999,
+      time: 1,
+    };
+
+    expect(isMentioningSelf({
+      ...baseEvent,
+      message: [{ type: 'at', data: { qq: '999' } }],
+    } as any)).toBe(true);
+
+    expect(isMentioningSelf({
+      ...baseEvent,
+      message: [{ type: 'at', data: { qq: 123 } }],
+    } as any)).toBe(false);
   });
 
   it('detects SILK and AMR headers', () => {

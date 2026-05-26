@@ -61,6 +61,7 @@ export function resolveOneBotAccount(
       allowFrom: onebot?.allowFrom,
       groupAutoReact: onebot?.groupAutoReact,
       groupAutoReactEmojiId: onebot?.groupAutoReactEmojiId,
+      groupRequireMention: onebot?.groupRequireMention,
     };
   } else {
     const account = onebot?.accounts?.[resolvedAccountId];
@@ -87,6 +88,7 @@ export function resolveOneBotAccount(
   const allowFrom = accountConfig.allowFrom;
   const groupAutoReact = accountConfig.groupAutoReact === true;
   const groupAutoReactEmojiId = accountConfig.groupAutoReactEmojiId ?? 1;
+  const groupRequireMention = accountConfig.groupRequireMention !== false;
 
   return {
     accountId: resolvedAccountId,
@@ -98,6 +100,7 @@ export function resolveOneBotAccount(
     allowFrom,
     groupAutoReact,
     groupAutoReactEmojiId,
+    groupRequireMention,
     config: accountConfig,
   };
 }
