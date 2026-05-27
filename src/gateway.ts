@@ -515,6 +515,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         log?.info(
           `[onebot:${account.accountId}] ctxPayload: From=${fromAddress}, SessionKey=${route.sessionKey}, ChatType=${isGroup ? "group" : "direct"}, hasAudio=${voiceMedia.length > 0}`,
         );
+        log?.info(`[onebot:${account.accountId}] OpenClaw source text:\n${String(ctxPayload.BodyForAgent ?? ctxPayload.Body ?? "")}`);
 
         const sendErrorMessage = async (errorText: string) => {
           try {

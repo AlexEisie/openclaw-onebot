@@ -479,6 +479,7 @@ describe('gateway', () => {
     const wsServer = await startMockOneBotWsServer();
     const ac = new AbortController();
     const { startGateway } = await import('../src/gateway.js');
+    const infoLogs: string[] = [];
 
     let readyResolve!: () => void;
     const readyP = new Promise<void>((r) => (readyResolve = r));
@@ -496,7 +497,7 @@ describe('gateway', () => {
       abortSignal: ac.signal,
       cfg: {},
       onReady: () => readyResolve(),
-      log: { info: () => {}, error: () => {}, debug: () => {} },
+      log: { info: (msg) => infoLogs.push(msg), error: () => {}, debug: () => {} },
     });
 
     await readyP;
@@ -540,6 +541,7 @@ describe('gateway', () => {
     expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
     expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrls).toEqual([imageUrl]);
     expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
+    expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(`[Image: ${imageUrl}]`))).toBe(true);
 
     ac.abort();
     await runP;
