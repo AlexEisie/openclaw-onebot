@@ -419,6 +419,62 @@ describe('gateway', () => {
     await wsServer.close();
   });
 
+  it('keeps non-bot mentions in group message text', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: () => {}, error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 118,
+      user_id: 229,
+      group_id: 999004,
+      message: [
+        { type: 'at', data: { qq: '999' } },
+        { type: 'at', data: { qq: '123', name: 'B' } },
+        { type: 'text', data: { text: ' 这个人在干什么' } },
+      ],
+      raw_message: '[CQ:at,qq=999][CQ:at,qq=123] 这个人在干什么',
+      sender: { user_id: 229, nickname: 'MentionOtherUser', role: 'member' },
+      self_id: 999,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastDispatchArgs).not.toBeNull();
+    }, WAIT_FOR_BATCH);
+
+    expect(runtimeState.state.lastDispatchArgs.ctx.RawBody).toBe('[mentioned user 123 B] 这个人在干什么');
+    expect(runtimeState.state.lastFinalizeArgs.Body).toContain('[mentioned user 123 B] 这个人在干什么');
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+  });
+
   it('can disable automatic group reactions via config', async () => {
     const wsServer = await startMockOneBotWsServer();
     const ac = new AbortController();

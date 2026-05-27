@@ -10,6 +10,7 @@ import {
   extractImages,
   extractRecordSegments,
   extractText,
+  extractTextForEvent,
   isAmrFormat,
   isMentioningSelf,
   isSilkFormat,
@@ -90,6 +91,26 @@ describe('gateway helpers', () => {
       ...baseEvent,
       message: [{ type: 'at', data: { qq: 123 } }],
     } as any)).toBe(false);
+  });
+
+  it('drops the bot mention but keeps other group mentions visible', () => {
+    expect(extractTextForEvent({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 2,
+      user_id: 42,
+      group_id: 100,
+      raw_message: '',
+      sender: { user_id: 42 },
+      self_id: 999,
+      time: 1,
+      message: [
+        { type: 'at', data: { qq: '999' } },
+        { type: 'at', data: { qq: '123', name: 'B' } },
+        { type: 'text', data: { text: ' 这个人在干什么' } },
+      ],
+    } as any)).toBe('[mentioned user 123 B] 这个人在干什么');
   });
 
   it('detects SILK and AMR headers', () => {

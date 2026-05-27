@@ -66,6 +66,23 @@ function formatAtSegment(data: Record<string, unknown>): string {
   return name ? `[at:${label} ${name}]` : `[at:${label}]`;
 }
 
+function formatVisibleMention(data: Record<string, unknown>): string {
+  const qq = String(data.qq ?? "").trim();
+  const label = qq === "all" ? "all members" : qq;
+  const name = segmentString(data.name);
+  return name ? `[mentioned user ${label} ${name}]` : `[mentioned user ${label}]`;
+}
+
+export function extractTextForEvent(event: OneBotMessageEvent): string {
+  const selfId = String(event.self_id);
+  return event.message.map((seg) => {
+    if (seg.type === "at") {
+      return String(seg.data.qq ?? "") === selfId ? "" : formatVisibleMention(seg.data);
+    }
+    return extractText([seg]);
+  }).join("");
+}
+
 function extractReplyMessageIds(segments: OneBotMessageSegment[]): Array<string | number> {
   return segments
     .filter((seg) => seg.type === "reply")
@@ -609,7 +626,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const isGroup = event.message_type === "group";
         const senderId = String(event.user_id);
         const senderName = event.sender.card || event.sender.nickname || senderId;
-        const text = extractText(event.message) || event.raw_message;
+        const text = extractTextForEvent(event) || event.raw_message;
         const imageAttachments = [
           ...extractImageAttachments(event.message),
           ...await extractRepliedImageAttachments(account, event.message, log),
