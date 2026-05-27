@@ -29,6 +29,7 @@ const MAX_RECONNECT_ATTEMPTS = 100;
 const BATCH_GAP_MS = 1500;
 const BATCH_MAX_MESSAGES = 12;
 const BATCH_MAX_CHARS = 50000;
+const RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface GatewayContext {
   account: ResolvedOneBotAccount;
@@ -503,14 +504,32 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           const messagesConfig = pluginRuntime.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId);
 
           let hasResponse = false;
-          const responseTimeout = 18000;
           let timeoutId: ReturnType<typeof setTimeout> | null = null;
+          let removeAbortListener: (() => void) | undefined;
 
-          const timeoutPromise = new Promise<void>((_, reject) => {
-            timeoutId = setTimeout(() => {
-              if (!hasResponse) reject(new Error("Response timeout"));
-            }, responseTimeout);
+          const clearResponseTimeout = () => {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+              timeoutId = null;
+            }
+          };
+
+          const abortPromise = new Promise<void>((resolve) => {
+            if (abortSignal.aborted) {
+              resolve();
+              return;
+            }
+            const onAbort = () => resolve();
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
           });
+
+          timeoutId = setTimeout(() => {
+            timeoutId = null;
+            if (hasResponse || abortSignal.aborted) return;
+            log?.info(`[onebot:${account.accountId}] No response within timeout; continuing to wait`);
+            void sendErrorMessage("[OpenClaw] Request received, processing...");
+          }, RESPONSE_TIMEOUT_MS);
 
           const dispatchPromise = pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
@@ -521,8 +540,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
                 info: { kind: string },
               ) => {
+                if (abortSignal.aborted) return;
                 hasResponse = true;
-                if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
+                clearResponseTimeout();
 
                 log?.info(
                   `[onebot:${account.accountId}] deliver(${info.kind}): textLen=${payload.text?.length ?? 0}`,
@@ -578,9 +598,10 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 }
               },
               onError: async (err: unknown) => {
+                if (abortSignal.aborted) return;
                 log?.error(`[onebot:${account.accountId}] Dispatch error: ${err}`);
                 hasResponse = true;
-                if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
+                clearResponseTimeout();
                 await sendErrorMessage(`[OpenClaw] Error: ${String(err).slice(0, 500)}`);
               },
             },
@@ -588,13 +609,10 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           });
 
           try {
-            await Promise.race([dispatchPromise, timeoutPromise]);
-          } catch (err) {
-            if (timeoutId) clearTimeout(timeoutId);
-            if (!hasResponse) {
-              log?.error(`[onebot:${account.accountId}] No response within timeout`);
-              await sendErrorMessage("[OpenClaw] Request received, processing...");
-            }
+            await Promise.race([dispatchPromise, abortPromise]);
+          } finally {
+            clearResponseTimeout();
+            removeAbortListener?.();
           }
         } catch (err) {
           log?.error(`[onebot:${account.accountId}] Message processing failed: ${err}`);

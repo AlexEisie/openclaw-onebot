@@ -37,7 +37,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 📣 群聊默认仅响应 @ 机器人的消息，可用 `groupRequireMention` 关闭
 - 🧩 OneBot v11 通用消息段、消息撤回/查询、群信息与基础群管理 action
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
-- ✅ 133 个测试用例全部通过
+- ✅ 134 个测试用例全部通过
 - 📈 覆盖率可通过 `npm run coverage` 复核
 
 ### 架构
@@ -271,7 +271,7 @@ services:
 
 ```bash
 npm install
-npm test          # 133 tests
+npm test          # 134 tests
 npm run build     # 编译 TypeScript
 npm run coverage  # 覆盖率报告
 npm run sync:openclaw-cli  # 审查后重新同步 OpenClaw CLI 的 shared-dir 参数
@@ -327,7 +327,7 @@ Note:
 - 🧩 OneBot v11 message segments, mixed reply/@/image sends, delete/query APIs, group info, and basic group-management actions
 - 🧭 OpenClaw text-command support for authorized senders (`/status`, `/help`, `/commands`, `/model`, `/new`, `/reset`, etc.)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
-- ✅ 133 tests passing
+- ✅ 134 tests passing
 - 📈 Coverage can be re-generated with `npm run coverage`
 
 ### Quick Start
@@ -500,7 +500,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ```bash
 npm install
-npm test          # Run 133 tests
+npm test          # Run 134 tests
 npm run build     # Compile TypeScript
 npm run coverage  # Coverage report
 npm run sync:openclaw-cli  # Re-apply shared-dir CLI wiring after review
