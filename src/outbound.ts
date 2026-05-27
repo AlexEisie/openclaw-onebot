@@ -27,10 +27,12 @@ export type OneBotReactionResult = {
   error?: string;
 };
 
+export type OneBotTarget = { type: 'private' | 'group'; id: number };
+
 const STAGED_MEDIA_DIR = 'openclaw';
 const STAGED_MEDIA_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-function parseTarget(to: string): { type: 'private' | 'group'; id: number } {
+export function parseTarget(to: string): OneBotTarget {
   const normalized = to.replace(/^onebot:/i, '');
 
   if (normalized.startsWith('private:')) {
@@ -42,7 +44,7 @@ function parseTarget(to: string): { type: 'private' | 'group'; id: number } {
   return { type: 'private', id: Number(normalized) };
 }
 
-async function callApi(
+export async function callOneBotApi(
   account: ResolvedOneBotAccount,
   endpoint: string,
   body: Record<string, unknown>,
@@ -62,13 +64,13 @@ async function callApi(
   });
 
   if (!response.ok) {
-    throw new Error(`OneBot API error: ${response.status} ${response.statusText}`);
+    throw new Error(`OneBot API ${endpoint} error: ${response.status} ${response.statusText}`);
   }
 
   return (await response.json()) as OneBotApiResponse;
 }
 
-function ensureApiSuccess(result: OneBotApiResponse, endpoint: string): OneBotApiResponse {
+export function ensureApiSuccess(result: OneBotApiResponse, endpoint: string): OneBotApiResponse {
   if (result.retcode !== 0 || result.status === 'failed') {
     throw new Error(
       `OneBot API ${endpoint} failed: ${result.retcode} ${result.message ?? result.wording ?? ''}`.trim(),
@@ -190,6 +192,140 @@ function buildMessage(text: string): OneBotMessageSegment[] {
   return segments;
 }
 
+function resolveSendMsgTarget(target: OneBotTarget): Record<string, unknown> {
+  return target.type === 'private'
+    ? { message_type: 'private', user_id: target.id }
+    : { message_type: 'group', group_id: target.id };
+}
+
+function getResponseMessageId(result: OneBotApiResponse): string | undefined {
+  const data = result.data as { message_id?: number | string } | null;
+  return data?.message_id != null ? String(data.message_id) : undefined;
+}
+
+export async function sendMessageSegments(
+  account: ResolvedOneBotAccount,
+  target: OneBotTarget,
+  message: OneBotMessageSegment[],
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'send_msg', {
+    ...resolveSendMsgTarget(target),
+    message,
+  }), 'send_msg');
+}
+
+export async function deleteMessage(
+  account: ResolvedOneBotAccount,
+  messageId: string | number,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'delete_msg', {
+    message_id: normalizeMessageRef(messageId),
+  }), 'delete_msg');
+}
+
+export async function getMessage(
+  account: ResolvedOneBotAccount,
+  messageId: string | number,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_msg', {
+    message_id: normalizeMessageRef(messageId),
+  }), 'get_msg');
+}
+
+export async function getStatus(account: ResolvedOneBotAccount): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_status', {}), 'get_status');
+}
+
+export async function getLoginInfo(account: ResolvedOneBotAccount): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_login_info', {}), 'get_login_info');
+}
+
+export async function getFriendList(account: ResolvedOneBotAccount): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_friend_list', {}), 'get_friend_list');
+}
+
+export async function getGroupList(account: ResolvedOneBotAccount): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_group_list', {}), 'get_group_list');
+}
+
+export async function getGroupInfo(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_group_info', {
+    group_id: normalizeMessageRef(groupId),
+  }), 'get_group_info');
+}
+
+export async function getGroupMemberInfo(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+  userId: string | number,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_group_member_info', {
+    group_id: normalizeMessageRef(groupId),
+    user_id: normalizeMessageRef(userId),
+    no_cache: false,
+  }), 'get_group_member_info');
+}
+
+export async function getGroupMemberList(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_group_member_list', {
+    group_id: normalizeMessageRef(groupId),
+  }), 'get_group_member_list');
+}
+
+export async function setGroupBan(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+  userId: string | number,
+  durationSeconds: string | number,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'set_group_ban', {
+    group_id: normalizeMessageRef(groupId),
+    user_id: normalizeMessageRef(userId),
+    duration: normalizeMessageRef(durationSeconds),
+  }), 'set_group_ban');
+}
+
+export async function setGroupKick(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+  userId: string | number,
+  rejectAddRequest = false,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'set_group_kick', {
+    group_id: normalizeMessageRef(groupId),
+    user_id: normalizeMessageRef(userId),
+    reject_add_request: rejectAddRequest,
+  }), 'set_group_kick');
+}
+
+export async function setGroupLeave(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+  isDismiss = false,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'set_group_leave', {
+    group_id: normalizeMessageRef(groupId),
+    is_dismiss: isDismiss,
+  }), 'set_group_leave');
+}
+
+export async function sendLike(
+  account: ResolvedOneBotAccount,
+  userId: string | number,
+  times: string | number = 1,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'send_like', {
+    user_id: normalizeMessageRef(userId),
+    times: normalizeMessageRef(times),
+  }), 'send_like');
+}
+
 export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   const { to, text, account } = ctx;
 
@@ -204,12 +340,12 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     let result: OneBotApiResponse;
 
     if (target.type === 'private') {
-      result = await callApi(account, 'send_private_msg', {
+      result = await callOneBotApi(account, 'send_private_msg', {
         user_id: target.id,
         message,
       });
     } else {
-      result = await callApi(account, 'send_group_msg', {
+      result = await callOneBotApi(account, 'send_group_msg', {
         group_id: target.id,
         message,
       });
@@ -222,10 +358,9 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       };
     }
 
-    const data = result.data as { message_id?: number } | null;
     return {
       channel: 'onebot',
-      messageId: data?.message_id != null ? String(data.message_id) : undefined,
+      messageId: getResponseMessageId(result),
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -247,7 +382,7 @@ export async function sendImage(
   const endpoint = targetType === 'private' ? 'send_private_msg' : 'send_group_msg';
   const idField = targetType === 'private' ? 'user_id' : 'group_id';
 
-  return ensureApiSuccess(await callApi(account, endpoint, { [idField]: targetId, message }), endpoint);
+  return ensureApiSuccess(await callOneBotApi(account, endpoint, { [idField]: targetId, message }), endpoint);
 }
 
 export async function sendRecord(
@@ -264,7 +399,7 @@ export async function sendRecord(
   const endpoint = targetType === 'private' ? 'send_private_msg' : 'send_group_msg';
   const idField = targetType === 'private' ? 'user_id' : 'group_id';
 
-  return ensureApiSuccess(await callApi(account, endpoint, { [idField]: targetId, message }), endpoint);
+  return ensureApiSuccess(await callOneBotApi(account, endpoint, { [idField]: targetId, message }), endpoint);
 }
 
 export async function uploadFile(
@@ -278,7 +413,7 @@ export async function uploadFile(
   const endpoint = targetType === 'private' ? 'upload_private_file' : 'upload_group_file';
   const idField = targetType === 'private' ? 'user_id' : 'group_id';
 
-  return ensureApiSuccess(await callApi(account, endpoint, {
+  return ensureApiSuccess(await callOneBotApi(account, endpoint, {
     [idField]: targetId,
     file: mediaUri,
     name: fileName,
@@ -301,7 +436,7 @@ export async function reactToMessage(
   }
 
   try {
-    const result = await callApi(account, 'set_msg_emoji_like', {
+    const result = await callOneBotApi(account, 'set_msg_emoji_like', {
       message_id: normalizeMessageRef(messageId),
       emoji_id: normalizeMessageRef(emojiId),
     });

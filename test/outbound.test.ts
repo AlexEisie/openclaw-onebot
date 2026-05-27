@@ -2,7 +2,21 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sendText, sendImage, sendRecord, uploadFile, reactToMessage } from '../src/outbound.js';
+import {
+  deleteMessage,
+  getGroupInfo,
+  getGroupMemberInfo,
+  getStatus,
+  sendLike,
+  sendMessageSegments,
+  sendText,
+  sendImage,
+  sendRecord,
+  setGroupBan,
+  setGroupKick,
+  uploadFile,
+  reactToMessage,
+} from '../src/outbound.js';
 import type { ResolvedOneBotAccount } from '../src/types.js';
 
 function mkAccount(overrides?: Partial<ResolvedOneBotAccount>): ResolvedOneBotAccount {
@@ -172,8 +186,10 @@ describe('outbound', () => {
     const staged = join(sharedDir, rel);
     expect(existsSync(staged)).toBe(true);
     expect(readFileSync(staged, 'utf8')).toBe('voice-bytes');
-    expect(statSync(staged).mode & 0o777).toBe(0o600);
-    expect(statSync(join(sharedDir, 'openclaw', 'audio')).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') {
+      expect(statSync(staged).mode & 0o777).toBe(0o600);
+      expect(statSync(join(sharedDir, 'openclaw', 'audio')).mode & 0o777).toBe(0o700);
+    }
   });
 
   it('uploadFile: calls upload_group_file with file uri', async () => {
@@ -191,6 +207,60 @@ describe('outbound', () => {
     expect(body.group_id).toBe(9);
     expect(body.file).toBe('file:///tmp/f.zip');
     expect(body.name).toBe('f.zip');
+  });
+
+  it('sendMessageSegments: uses generic send_msg for private and group targets', async () => {
+    (globalThis.fetch as any).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ status: 'ok', retcode: 0, data: { message_id: 55 } }),
+    });
+
+    await sendMessageSegments(mkAccount(), { type: 'group', id: 123 }, [
+      { type: 'reply', data: { id: '44' } },
+      { type: 'text', data: { text: 'hello' } },
+    ]);
+
+    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    expect(String(url)).toMatch(/send_msg$/);
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ message_type: 'group', group_id: 123 });
+    expect(body.message).toEqual([
+      { type: 'reply', data: { id: '44' } },
+      { type: 'text', data: { text: 'hello' } },
+    ]);
+  });
+
+  it('wraps common OneBot v11 management APIs', async () => {
+    (globalThis.fetch as any).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ status: 'ok', retcode: 0, data: {} }),
+    });
+
+    await deleteMessage(mkAccount(), '100');
+    await getStatus(mkAccount());
+    await getGroupInfo(mkAccount(), '200');
+    await getGroupMemberInfo(mkAccount(), '200', '300');
+    await setGroupBan(mkAccount(), '200', '300', 60);
+    await setGroupKick(mkAccount(), '200', '300', true);
+    await sendLike(mkAccount(), '300', 2);
+
+    const endpoints = (globalThis.fetch as any).mock.calls.map(([url]: any[]) => String(url).split('/').pop());
+    expect(endpoints).toEqual([
+      'delete_msg',
+      'get_status',
+      'get_group_info',
+      'get_group_member_info',
+      'set_group_ban',
+      'set_group_kick',
+      'send_like',
+    ]);
+
+    const kickBody = JSON.parse((globalThis.fetch as any).mock.calls[5][1].body);
+    expect(kickBody).toMatchObject({ group_id: 200, user_id: 300, reject_add_request: true });
   });
 
   it('sendText: includes Authorization header when accessToken is set', async () => {

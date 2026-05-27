@@ -1,34 +1,57 @@
 import { basename, extname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import type { ResolvedOneBotAccount } from "./types.js";
+import type { ResolvedOneBotAccount, OneBotMessageSegment } from "./types.js";
 import { getDefaultContainerSharedDir, getDefaultSharedDir } from "./env.js";
 import { listOneBotAccountIds, resolveOneBotAccount, applyOneBotAccountConfig } from "./config.js";
-import { reactToMessage, sendImage, sendRecord, sendText, uploadFile } from "./outbound.js";
+import {
+  deleteMessage,
+  getFriendList,
+  getGroupInfo,
+  getGroupList,
+  getGroupMemberInfo,
+  getGroupMemberList,
+  getLoginInfo,
+  getMessage,
+  getStatus,
+  parseTarget,
+  reactToMessage,
+  sendImage,
+  sendLike,
+  sendMessageSegments,
+  sendRecord,
+  sendText,
+  setGroupBan,
+  setGroupKick,
+  setGroupLeave,
+  uploadFile,
+} from "./outbound.js";
 import { startGateway } from "./gateway.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
-const ONEBOT_MESSAGE_ACTIONS = ["react"] as const;
+const ONEBOT_MESSAGE_ACTIONS = [
+  "react",
+  "reply",
+  "unsend",
+  "delete",
+  "read",
+  "member-info",
+  "channel-info",
+  "channel-list",
+  "kick",
+  "timeout",
+  "leaveGroup",
+  "set-profile",
+] as const;
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".heif"]);
 const AUDIO_EXTS = new Set([".mp3", ".ogg", ".wav", ".m4a", ".aac", ".flac", ".amr", ".silk", ".opus"]);
+const VIDEO_EXTS = new Set([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]);
 
 function createActionResult<TDetails>(text: string, details: TDetails) {
   return {
     content: [{ type: "text" as const, text }],
     details,
   };
-}
-
-function parseTarget(to: string): { type: "private" | "group"; id: number } {
-  const normalized = to.replace(/^onebot:/i, "");
-
-  if (normalized.startsWith("private:")) {
-    return { type: "private", id: Number(normalized.slice(8)) };
-  }
-  if (normalized.startsWith("group:")) {
-    return { type: "group", id: Number(normalized.slice(6)) };
-  }
-  return { type: "private", id: Number(normalized) };
 }
 
 function resolveLocalMediaPath(mediaUrl: string): string {
@@ -39,9 +62,57 @@ function resolveLocalMediaPath(mediaUrl: string): string {
     throw new Error("OneBot sendMedia currently supports local file paths only");
   }
   if (mediaUrl.startsWith("file://")) {
-    return fileURLToPath(mediaUrl);
+    try {
+      return fileURLToPath(mediaUrl);
+    } catch {
+      return decodeURIComponent(new URL(mediaUrl).pathname);
+    }
   }
   return isAbsolute(mediaUrl) ? mediaUrl : resolvePath(mediaUrl);
+}
+
+function readStringParam(params: Record<string, unknown>, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = params[name];
+    if (value != null && String(value).trim() !== "") return String(value);
+  }
+  return undefined;
+}
+
+function readNumberParam(params: Record<string, unknown>, names: string[]): number | undefined {
+  const value = readStringParam(params, names);
+  if (value == null) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function readBooleanParam(params: Record<string, unknown>, names: string[], fallback = false): boolean {
+  const value = readStringParam(params, names);
+  if (value == null) return fallback;
+  return /^(1|true|yes|on)$/i.test(value);
+}
+
+function buildTextSegments(text?: string): OneBotMessageSegment[] {
+  const trimmed = text ?? "";
+  return trimmed ? [{ type: "text", data: { text: trimmed } }] : [];
+}
+
+function buildReplySegments(params: Record<string, unknown>): OneBotMessageSegment[] {
+  const messageId = readStringParam(params, ["message_id", "messageId", "reply_to", "replyTo"]);
+  const text = readStringParam(params, ["text", "body", "message"]);
+  const segments: OneBotMessageSegment[] = [];
+  if (messageId) segments.push({ type: "reply", data: { id: messageId } });
+  segments.push(...buildTextSegments(text));
+  return segments;
+}
+
+function oneBotDataResult(text: string, action: string, data: unknown) {
+  return createActionResult(text, {
+    ok: true,
+    channel: "onebot",
+    action,
+    data,
+  });
 }
 
 export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
@@ -58,6 +129,9 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
     chatTypes: ["direct", "group"],
     media: true,
     reactions: true,
+    reply: true,
+    unsend: true,
+    groupManagement: true,
     threads: false,
     blockStreaming: true,
   },
@@ -165,6 +239,10 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
         mediaResult = await sendRecord(account, target.type, target.id, mediaPath);
       } else if (IMAGE_EXTS.has(ext)) {
         mediaResult = await sendImage(account, target.type, target.id, mediaPath);
+      } else if (VIDEO_EXTS.has(ext)) {
+        mediaResult = await sendMessageSegments(account, target, [
+          { type: "video", data: { file: mediaPath.startsWith("file://") ? mediaPath : `file://${mediaPath}` } },
+        ]);
       } else {
         mediaResult = await uploadFile(account, target.type, target.id, mediaPath, basename(mediaPath));
       }
@@ -199,9 +277,9 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
         actions: [...ONEBOT_MESSAGE_ACTIONS],
       };
     },
-    supportsAction: ({ action }) => action === "react",
+    supportsAction: ({ action }) => (ONEBOT_MESSAGE_ACTIONS as readonly string[]).includes(action),
     handleAction: async ({ action, cfg, params, accountId, toolContext }) => {
-      if (action !== "react") {
+      if (!(ONEBOT_MESSAGE_ACTIONS as readonly string[]).includes(action)) {
         return createActionResult(`Unsupported OneBot action: ${action}`, {
           ok: false,
           channel: "onebot",
@@ -210,11 +288,149 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
         });
       }
 
+      const account = resolveOneBotAccount(cfg, accountId);
+
       const messageId =
         params.message_id ??
         params.messageId ??
         params.message ??
         toolContext?.currentMessageId;
+
+      if (action === "reply") {
+        const to = readStringParam(params, ["to", "target"]) ?? toolContext?.currentChannelId;
+        const segments = buildReplySegments(params);
+        if (!to || segments.length === 0) {
+          return createActionResult("OneBot reply requires `to` and reply text or message_id.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot reply requires `to` and reply text or message_id.",
+          });
+        }
+        const result = await sendMessageSegments(account, parseTarget(to), segments);
+        return oneBotDataResult("OneBot reply sent.", action, result);
+      }
+
+      if (action === "unsend" || action === "delete") {
+        if (messageId == null) {
+          return createActionResult("OneBot delete requires `message_id` or current message context.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot delete requires `message_id` or current message context.",
+          });
+        }
+        const result = await deleteMessage(account, messageId as string | number);
+        return oneBotDataResult(`Deleted OneBot message ${String(messageId)}.`, action, result);
+      }
+
+      if (action === "read") {
+        if (messageId != null) {
+          const result = await getMessage(account, messageId as string | number);
+          return oneBotDataResult(`Fetched OneBot message ${String(messageId)}.`, action, result);
+        }
+        const query = readStringParam(params, ["query", "kind", "type"]) ?? "status";
+        const result = query === "login" ? await getLoginInfo(account) : await getStatus(account);
+        return oneBotDataResult(`Fetched OneBot ${query}.`, action, result);
+      }
+
+      if (action === "channel-list") {
+        const kind = readStringParam(params, ["kind", "type"]) ?? "groups";
+        const result = kind === "friends" ? await getFriendList(account) : await getGroupList(account);
+        return oneBotDataResult(`Fetched OneBot ${kind}.`, action, result);
+      }
+
+      if (action === "channel-info") {
+        const groupId = readStringParam(params, ["group_id", "groupId", "channel_id", "channelId"]);
+        if (!groupId) {
+          return createActionResult("OneBot channel-info requires `group_id`.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot channel-info requires `group_id`.",
+          });
+        }
+        const result = await getGroupInfo(account, groupId);
+        return oneBotDataResult(`Fetched OneBot group ${groupId}.`, action, result);
+      }
+
+      if (action === "member-info") {
+        const groupId = readStringParam(params, ["group_id", "groupId"]);
+        const userId = readStringParam(params, ["user_id", "userId", "member_id", "memberId"]);
+        if (!groupId) {
+          return createActionResult("OneBot member-info requires `group_id`.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot member-info requires `group_id`.",
+          });
+        }
+        const result = userId
+          ? await getGroupMemberInfo(account, groupId, userId)
+          : await getGroupMemberList(account, groupId);
+        return oneBotDataResult(`Fetched OneBot group member data for ${groupId}.`, action, result);
+      }
+
+      if (action === "kick") {
+        const groupId = readStringParam(params, ["group_id", "groupId"]);
+        const userId = readStringParam(params, ["user_id", "userId", "member_id", "memberId"]);
+        if (!groupId || !userId) {
+          return createActionResult("OneBot kick requires `group_id` and `user_id`.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot kick requires `group_id` and `user_id`.",
+          });
+        }
+        const result = await setGroupKick(account, groupId, userId, readBooleanParam(params, ["reject_add_request", "rejectAddRequest"]));
+        return oneBotDataResult(`Kicked OneBot group member ${userId}.`, action, result);
+      }
+
+      if (action === "timeout") {
+        const groupId = readStringParam(params, ["group_id", "groupId"]);
+        const userId = readStringParam(params, ["user_id", "userId", "member_id", "memberId"]);
+        const duration = readNumberParam(params, ["duration", "duration_seconds", "durationSeconds", "seconds"]) ?? 1800;
+        if (!groupId || !userId) {
+          return createActionResult("OneBot timeout requires `group_id` and `user_id`.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot timeout requires `group_id` and `user_id`.",
+          });
+        }
+        const result = await setGroupBan(account, groupId, userId, duration);
+        return oneBotDataResult(`Muted OneBot group member ${userId}.`, action, result);
+      }
+
+      if (action === "leaveGroup") {
+        const groupId = readStringParam(params, ["group_id", "groupId"]);
+        if (!groupId) {
+          return createActionResult("OneBot leaveGroup requires `group_id`.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot leaveGroup requires `group_id`.",
+          });
+        }
+        const result = await setGroupLeave(account, groupId, readBooleanParam(params, ["is_dismiss", "isDismiss"]));
+        return oneBotDataResult(`Left OneBot group ${groupId}.`, action, result);
+      }
+
+      if (action === "set-profile") {
+        const userId = readStringParam(params, ["user_id", "userId", "target", "to"]);
+        const times = readNumberParam(params, ["times", "count"]) ?? 1;
+        if (!userId) {
+          return createActionResult("OneBot set-profile currently supports `send_like` and requires `user_id`.", {
+            ok: false,
+            channel: "onebot",
+            action,
+            error: "OneBot set-profile currently supports `send_like` and requires `user_id`.",
+          });
+        }
+        const result = await sendLike(account, userId, times);
+        return oneBotDataResult(`Sent OneBot like to ${userId}.`, action, result);
+      }
+
       const emojiId =
         params.emoji_id ??
         params.emojiId ??
@@ -233,7 +449,6 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
         );
       }
 
-      const account = resolveOneBotAccount(cfg, accountId);
       const result = await reactToMessage(account, messageId as string | number, emojiId as string | number);
 
       if (!result.ok) {

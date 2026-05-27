@@ -1,18 +1,63 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { reactToMessage, sendImage, sendRecord, sendText, uploadFile } = vi.hoisted(() => ({
+const {
+  deleteMessage,
+  getGroupInfo,
+  getGroupList,
+  getGroupMemberInfo,
+  getGroupMemberList,
+  getStatus,
+  reactToMessage,
+  sendLike,
+  sendMessageSegments,
+  sendImage,
+  sendRecord,
+  sendText,
+  setGroupBan,
+  setGroupKick,
+  setGroupLeave,
+  uploadFile,
+} = vi.hoisted(() => ({
+  deleteMessage: vi.fn(),
+  getGroupInfo: vi.fn(),
+  getGroupList: vi.fn(),
+  getGroupMemberInfo: vi.fn(),
+  getGroupMemberList: vi.fn(),
+  getStatus: vi.fn(),
   reactToMessage: vi.fn(),
+  sendLike: vi.fn(),
+  sendMessageSegments: vi.fn(),
   sendImage: vi.fn(),
   sendRecord: vi.fn(),
   sendText: vi.fn(),
+  setGroupBan: vi.fn(),
+  setGroupKick: vi.fn(),
+  setGroupLeave: vi.fn(),
   uploadFile: vi.fn(),
 }));
 
 vi.mock('../src/outbound.js', () => ({
+  deleteMessage,
+  getGroupInfo,
+  getGroupList,
+  getGroupMemberInfo,
+  getGroupMemberList,
+  getStatus,
+  parseTarget: (to: string) => {
+    const normalized = to.replace(/^onebot:/i, '');
+    if (normalized.startsWith('group:')) return { type: 'group', id: Number(normalized.slice(6)) };
+    if (normalized.startsWith('private:')) return { type: 'private', id: Number(normalized.slice(8)) };
+    return { type: 'private', id: Number(normalized) };
+  },
   reactToMessage,
+  sendLike,
+  sendMessageSegments,
   sendImage,
   sendRecord,
   sendText,
+  setGroupBan,
+  setGroupKick,
+  setGroupLeave,
   uploadFile,
 }));
 
@@ -20,10 +65,21 @@ import { onebotPlugin } from '../src/channel.js';
 
 describe('channel actions', () => {
   beforeEach(() => {
+    deleteMessage.mockReset();
+    getGroupInfo.mockReset();
+    getGroupList.mockReset();
+    getGroupMemberInfo.mockReset();
+    getGroupMemberList.mockReset();
+    getStatus.mockReset();
     reactToMessage.mockReset();
+    sendLike.mockReset();
+    sendMessageSegments.mockReset();
     sendImage.mockReset();
     sendRecord.mockReset();
     sendText.mockReset();
+    setGroupBan.mockReset();
+    setGroupKick.mockReset();
+    setGroupLeave.mockReset();
     uploadFile.mockReset();
   });
 
@@ -31,7 +87,7 @@ describe('channel actions', () => {
     vi.restoreAllMocks();
   });
 
-  it('advertises the react action only', () => {
+  it('advertises OneBot message actions', () => {
     expect(onebotPlugin.actions?.describeMessageTool?.({
       cfg: {
         channels: {
@@ -41,8 +97,22 @@ describe('channel actions', () => {
           },
         },
       },
-    } as any)).toEqual({ actions: ['react'] });
+    } as any)).toEqual({ actions: [
+      'react',
+      'reply',
+      'unsend',
+      'delete',
+      'read',
+      'member-info',
+      'channel-info',
+      'channel-list',
+      'kick',
+      'timeout',
+      'leaveGroup',
+      'set-profile',
+    ] });
     expect(onebotPlugin.actions?.supportsAction?.({ action: 'react' } as any)).toBe(true);
+    expect(onebotPlugin.actions?.supportsAction?.({ action: 'unsend' } as any)).toBe(true);
     expect(onebotPlugin.actions?.supportsAction?.({ action: 'wave' } as any)).toBe(false);
   });
 
@@ -131,6 +201,91 @@ describe('channel actions', () => {
 
     expect(failure.details).toMatchObject({ ok: false, channel: 'onebot', action: 'react' });
     expect(String((failure.details as any).error)).toMatch(/reaction failed/);
+  });
+
+  it('handles reply and delete style OneBot actions', async () => {
+    sendMessageSegments.mockResolvedValueOnce({
+      status: 'ok',
+      retcode: 0,
+      data: { message_id: 77 },
+    });
+
+    const reply = await onebotPlugin.actions!.handleAction!({
+      action: 'reply',
+      cfg: {
+        channels: {
+          onebot: {
+            wsUrl: 'ws://127.0.0.1:3000',
+            httpUrl: 'http://127.0.0.1:3001',
+          },
+        },
+      },
+      params: {
+        to: 'group:42',
+        message_id: '11',
+        text: 'roger',
+      },
+      accountId: 'default',
+      toolContext: {},
+    } as any);
+
+    expect(reply.details).toMatchObject({ ok: true, channel: 'onebot', action: 'reply' });
+    expect(sendMessageSegments).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      { type: 'group', id: 42 },
+      [
+        { type: 'reply', data: { id: '11' } },
+        { type: 'text', data: { text: 'roger' } },
+      ],
+    );
+
+    deleteMessage.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: null });
+
+    const deleted = await onebotPlugin.actions!.handleAction!({
+      action: 'unsend',
+      cfg: {},
+      params: { message_id: '99' },
+      accountId: 'default',
+      toolContext: {},
+    } as any);
+
+    expect(deleted.details).toMatchObject({ ok: true, channel: 'onebot', action: 'unsend' });
+    expect(deleteMessage).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'default' }), '99');
+  });
+
+  it('handles OneBot info and group management actions', async () => {
+    getStatus.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: { online: true } });
+    getGroupList.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: [{ group_id: 1 }] });
+    getGroupInfo.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: { group_id: 1 } });
+    getGroupMemberInfo.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: { user_id: 2 } });
+    setGroupBan.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: null });
+    setGroupKick.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: null });
+    setGroupLeave.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: null });
+    sendLike.mockResolvedValueOnce({ status: 'ok', retcode: 0, data: null });
+
+    const base = {
+      cfg: {},
+      accountId: 'default',
+      toolContext: {},
+    };
+
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'read', params: {} } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'channel-list', params: {} } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'channel-info', params: { group_id: '1' } } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'member-info', params: { group_id: '1', user_id: '2' } } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'timeout', params: { group_id: '1', user_id: '2', duration: 60 } } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'kick', params: { group_id: '1', user_id: '2' } } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'leaveGroup', params: { group_id: '1' } } as any);
+    await onebotPlugin.actions!.handleAction!({ ...base, action: 'set-profile', params: { user_id: '2', times: 2 } } as any);
+
+    expect(getStatus).toHaveBeenCalled();
+    expect(getGroupList).toHaveBeenCalled();
+    expect(getGroupInfo).toHaveBeenCalledWith(expect.anything(), '1');
+    expect(getGroupMemberInfo).toHaveBeenCalledWith(expect.anything(), '1', '2');
+    expect(setGroupBan).toHaveBeenCalledWith(expect.anything(), '1', '2', 60);
+    expect(setGroupKick).toHaveBeenCalledWith(expect.anything(), '1', '2', false);
+    expect(setGroupLeave).toHaveBeenCalledWith(expect.anything(), '1', false);
+    expect(sendLike).toHaveBeenCalledWith(expect.anything(), '2', 2);
   });
 
   it('routes outbound text through resolved OneBot accounts', async () => {
@@ -257,6 +412,36 @@ describe('channel actions', () => {
     );
     expect(sendText).not.toHaveBeenCalled();
     expect(result).toMatchObject({ channel: 'onebot', messageId: '101' });
+  });
+
+  it('routes outbound video media through generic OneBot send_msg', async () => {
+    sendMessageSegments.mockResolvedValueOnce({
+      status: 'ok',
+      retcode: 0,
+      data: { message_id: 102 },
+    });
+
+    const result = await onebotPlugin.outbound!.sendMedia!({
+      to: 'group:77',
+      text: '',
+      mediaUrl: '/tmp/reply.mp4',
+      accountId: 'default',
+      cfg: {
+        channels: {
+          onebot: {
+            wsUrl: 'ws://127.0.0.1:3000',
+            httpUrl: 'http://127.0.0.1:3001',
+          },
+        },
+      },
+    } as any);
+
+    expect(sendMessageSegments).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      { type: 'group', id: 77 },
+      [{ type: 'video', data: { file: 'file:///tmp/reply.mp4' } }],
+    );
+    expect(result).toMatchObject({ channel: 'onebot', messageId: '102' });
   });
 
   it('routes non-image media through uploadFile using the basename', async () => {

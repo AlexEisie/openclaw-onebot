@@ -35,13 +35,17 @@ describe('gateway helpers', () => {
   it('extracts text, images, and record segments from OneBot message arrays', () => {
     const segments = [
       { type: 'text', data: { text: 'hello' } },
+      { type: 'at', data: { qq: 999 } },
+      { type: 'face', data: { id: 14 } },
+      { type: 'reply', data: { id: 123 } },
       { type: 'image', data: { url: 'https://img.example/x.png' } },
       { type: 'record', data: { file: 'voice.amr' } },
+      { type: 'video', data: { url: 'https://video.example/v.mp4' } },
       { type: 'text', data: { text: ' world' } },
       { type: 'image', data: { file: 'fallback.png' } },
     ] as any;
 
-    expect(extractText(segments)).toBe('hello world');
+    expect(extractText(segments)).toBe('hello[at:999][face:14][reply:123][Video: https://video.example/v.mp4] world');
     expect(extractImages(segments)).toEqual([
       'https://img.example/x.png',
       'fallback.png',
