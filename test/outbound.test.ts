@@ -5,8 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildImageSegment,
   deleteMessage,
+  getGroupFileUrl,
   getGroupInfo,
   getGroupMemberInfo,
+  getPrivateFileUrl,
   getStatus,
   sendLike,
   sendMessageSegments,
@@ -347,6 +349,26 @@ describe('outbound', () => {
     const body = JSON.parse(init.body);
     expect(body.message_id).toBe(5566);
     expect(body.emoji_id).toBe(128077);
+  });
+
+  it('file URL helpers call NapCat file APIs', async () => {
+    (globalThis.fetch as any).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ status: 'ok', retcode: 0, data: { url: 'https://file.local/x.txt' } }),
+    });
+
+    await getPrivateFileUrl(mkAccount(), 'private-file-id');
+    await getGroupFileUrl(mkAccount(), '123', 'group-file-id', '456');
+
+    const privateCall = (globalThis.fetch as any).mock.calls[0];
+    expect(String(privateCall[0])).toMatch(/get_private_file_url$/);
+    expect(JSON.parse(privateCall[1].body)).toEqual({ file_id: 'private-file-id' });
+
+    const groupCall = (globalThis.fetch as any).mock.calls[1];
+    expect(String(groupCall[0])).toMatch(/get_group_file_url$/);
+    expect(JSON.parse(groupCall[1].body)).toEqual({ group_id: 123, file_id: 'group-file-id', busid: 456 });
   });
 
   it('reactToMessage: surfaces API errors', async () => {

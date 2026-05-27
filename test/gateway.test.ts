@@ -22,6 +22,8 @@ const outboundMockState: {
   reactError: Error | null;
   reactResult: { ok: boolean; error?: string } | null;
   getFileResult: any | null;
+  getPrivateFileUrlResult: any | null;
+  getGroupFileUrlResult: any | null;
 } = {
   sendTextError: null,
   sendImageError: null,
@@ -29,6 +31,8 @@ const outboundMockState: {
   reactError: null,
   reactResult: null,
   getFileResult: null,
+  getPrivateFileUrlResult: null,
+  getGroupFileUrlResult: null,
 };
 vi.mock('../src/outbound.js', () => {
   return {
@@ -36,6 +40,14 @@ vi.mock('../src/outbound.js', () => {
     getFile: async (account: any, fileRef: any) => {
       outboundCalls.push({ kind: 'getFile', args: [account, fileRef] });
       return outboundMockState.getFileResult ?? { status: 'ok', retcode: 0, data: {} };
+    },
+    getPrivateFileUrl: async (account: any, fileId: string) => {
+      outboundCalls.push({ kind: 'getPrivateFileUrl', args: [account, fileId] });
+      return outboundMockState.getPrivateFileUrlResult ?? { status: 'ok', retcode: 0, data: {} };
+    },
+    getGroupFileUrl: async (account: any, groupId: string | number, fileId: string, busid?: string | number) => {
+      outboundCalls.push({ kind: 'getGroupFileUrl', args: [account, groupId, fileId, busid] });
+      return outboundMockState.getGroupFileUrlResult ?? { status: 'ok', retcode: 0, data: {} };
     },
     sendText: async (args: any) => {
       if (outboundMockState.sendTextError) {
@@ -86,6 +98,8 @@ describe('gateway', () => {
     outboundMockState.reactError = null;
     outboundMockState.reactResult = null;
     outboundMockState.getFileResult = null;
+    outboundMockState.getPrivateFileUrlResult = null;
+    outboundMockState.getGroupFileUrlResult = null;
     runtimeState = createMockRuntime({
       nextDeliverPayload: { text: 'reply-from-agent', mediaUrls: ['file:///tmp/x.png'] },
     });
@@ -561,16 +575,26 @@ describe('gateway', () => {
     const { startGateway } = await import('../src/gateway.js');
     const infoLogs: string[] = [];
     const fileText = '请按这里的内容修改配置';
+    const fileUrl = 'https://napcat.local/private-file/modify.txt';
     outboundMockState.getFileResult = {
       status: 'ok',
       retcode: 0,
       data: {
-        file: '/app/napcat/files/modify.txt',
         file_name: '修改.txt',
         file_size: 91,
-        base64: Buffer.from(fileText, 'utf8').toString('base64'),
       },
     };
+    outboundMockState.getPrivateFileUrlResult = {
+      status: 'ok',
+      retcode: 0,
+      data: { url: fileUrl },
+    };
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ 'content-length': String(Buffer.byteLength(fileText, 'utf8')) }),
+      arrayBuffer: async () => Buffer.from(fileText, 'utf8'),
+    })) as any;
 
     let readyResolve!: () => void;
     const readyP = new Promise<void>((r) => (readyResolve = r));
@@ -593,42 +617,48 @@ describe('gateway', () => {
 
     await readyP;
 
-    wsServer.sendToAll({
-      post_type: 'message',
-      message_type: 'private',
-      sub_type: 'friend',
-      message_id: 120,
-      user_id: 1987460907,
-      message: [
-        {
-          type: 'file',
-          data: {
-            file: '修改.txt',
-            file_id: '2b3f7676f95b09df4de35ea1c783c368_30e30d96',
-            file_size: '91',
+    try {
+      wsServer.sendToAll({
+        post_type: 'message',
+        message_type: 'private',
+        sub_type: 'friend',
+        message_id: 120,
+        user_id: 1987460907,
+        message: [
+          {
+            type: 'file',
+            data: {
+              file: '修改.txt',
+              file_id: '2b3f7676f95b09df4de35ea1c783c368_30e30d96',
+              file_size: '91',
+            },
           },
-        },
-      ],
-      raw_message: '[CQ:file,file=修改.txt,file_id=2b3f7676f95b09df4de35ea1c783c368_30e30d96,file_size=91]',
-      sender: { user_id: 1987460907, nickname: 'Alex Eisie' },
-      self_id: 3569793910,
-      time: Math.floor(Date.now() / 1000),
-    });
+        ],
+        raw_message: '[CQ:file,file=修改.txt,file_id=2b3f7676f95b09df4de35ea1c783c368_30e30d96,file_size=91]',
+        sender: { user_id: 1987460907, nickname: 'Alex Eisie' },
+        self_id: 3569793910,
+        time: Math.floor(Date.now() / 1000),
+      });
 
-    await vi.waitFor(() => {
-      expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
-    }, WAIT_FOR_BATCH);
+      await vi.waitFor(() => {
+        expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
+      }, WAIT_FOR_BATCH);
 
-    expect(outboundCalls.some((call) => call.kind === 'getFile')).toBe(true);
-    expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe('/app/napcat/files/modify.txt');
-    expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('text/plain');
-    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File: 修改.txt 91 bytes]');
-    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(fileText);
-    expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(fileText))).toBe(true);
-
-    ac.abort();
-    await runP;
-    await wsServer.close();
+      expect(outboundCalls.some((call) => call.kind === 'getFile')).toBe(true);
+      expect(outboundCalls.some((call) => call.kind === 'getPrivateFileUrl')).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledWith(fileUrl);
+      expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe(fileUrl);
+      expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('text/plain');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).not.toContain('[File: 修改.txt]\n[File: 修改.txt 91 bytes]');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File: 修改.txt 91 bytes]');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(fileText);
+      expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(fileText))).toBe(true);
+    } finally {
+      ac.abort();
+      await runP;
+      await wsServer.close();
+      globalThis.fetch = oldFetch;
+    }
   });
 
   it('can disable automatic group reactions via config', async () => {

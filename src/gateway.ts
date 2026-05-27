@@ -8,8 +8,9 @@ import type {
   OneBotMessageSegment,
 } from "./types.js";
 import { getOneBotRuntime } from "./runtime.js";
-import { getFile, getMessage, reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
+import { getMessage, reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
 import { cleanupVoiceFiles, processVoiceSegments } from "./voice.js";
+import { loadFileAttachments } from "./inbound-file.js";
 export {
   cleanupVoiceFiles,
   convertAmrToMp3,
@@ -104,40 +105,6 @@ function inferImageMimeType(img: OneBotImageAttachment): string {
   return "image/png";
 }
 
-function inferFileMimeType(name: string): string {
-  const lower = name.toLowerCase();
-  if (lower.endsWith(".txt") || lower.endsWith(".log")) return "text/plain";
-  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
-  if (lower.endsWith(".json")) return "application/json";
-  if (lower.endsWith(".csv")) return "text/csv";
-  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
-  if (lower.endsWith(".xml")) return "application/xml";
-  if (lower.endsWith(".pdf")) return "application/pdf";
-  if (lower.endsWith(".zip")) return "application/zip";
-  if (lower.endsWith(".doc")) return "application/msword";
-  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  return "application/octet-stream";
-}
-
-function isTextFileContentType(contentType: string): boolean {
-  return contentType.startsWith("text/")
-    || contentType === "application/json"
-    || contentType === "application/xml";
-}
-
-function extractFileDataFromApiResponse(result: OneBotApiResponse): Record<string, unknown> {
-  return result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
-}
-
-function decodeBase64Text(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  try {
-    return Buffer.from(value, "base64").toString("utf8").trim();
-  } catch {
-    return undefined;
-  }
-}
-
 export function extractTextForEvent(event: OneBotMessageEvent): string {
   const selfId = String(event.self_id);
   return event.message.map((seg) => {
@@ -218,7 +185,7 @@ export function extractText(segments: OneBotMessageSegment[]): string {
       case "video":
         return `[Video: ${String(seg.data.url ?? seg.data.file ?? "")}]`;
       case "file":
-        return `[File: ${String(seg.data.name ?? seg.data.file ?? "")}]`;
+        return "";
       case "share":
         return `[Share: ${String(seg.data.title ?? "")} ${String(seg.data.url ?? "")}]`;
       case "location":
@@ -250,53 +217,6 @@ export function extractImageAttachments(segments: OneBotMessageSegment[]): OneBo
       return attachment;
     })
     .filter((attachment) => attachment.source);
-}
-
-export async function loadFileAttachments(
-  account: ResolvedOneBotAccount,
-  segments: OneBotMessageSegment[],
-  log?: GatewayContext["log"],
-): Promise<OneBotFileAttachment[]> {
-  const attachments: OneBotFileAttachment[] = [];
-
-  for (const seg of segments.filter((segment) => segment.type === "file")) {
-    const name = segmentString(seg.data.name ?? seg.data.file) ?? "file";
-    const fileId = segmentString(seg.data.file_id ?? seg.data.fileId);
-    const file = segmentString(seg.data.file);
-    const declaredSize = Number(seg.data.file_size ?? seg.data.fileSize);
-    const contentType = inferFileMimeType(name);
-    const attachment: OneBotFileAttachment = {
-      name,
-      contentType,
-      ...(Number.isFinite(declaredSize) ? { size: declaredSize } : {}),
-    };
-
-    if (!fileId && !file) {
-      attachments.push(attachment);
-      continue;
-    }
-
-    try {
-      const result = await getFile(account, { fileId, file });
-      const data = extractFileDataFromApiResponse(result);
-      const url = segmentString(data.url);
-      const path = segmentString(data.file ?? data.path);
-      attachment.source = url ?? path;
-      const loadedName = segmentString(data.file_name ?? data.fileName ?? data.name);
-      if (loadedName) attachment.name = loadedName;
-      const loadedSize = Number(data.file_size ?? data.fileSize);
-      if (Number.isFinite(loadedSize)) attachment.size = loadedSize;
-      if (isTextFileContentType(attachment.contentType) && (attachment.size ?? 0) <= 64 * 1024) {
-        attachment.text = decodeBase64Text(data.base64);
-      }
-    } catch (err) {
-      log?.debug?.(`[onebot:${account.accountId}] Failed to load file ${fileId ?? file ?? name}: ${String(err)}`);
-    }
-
-    attachments.push(attachment);
-  }
-
-  return attachments;
 }
 
 export function extractImages(segments: OneBotMessageSegment[]): string[] {
@@ -803,7 +723,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         ];
         const replyContextText = replyContexts.map((context) => context.text).filter((text): text is string => Boolean(text));
         const images = imageAttachments.map((attachment) => attachment.source);
-        const fileAttachments = await loadFileAttachments(account, event.message, log);
+        const fileAttachments = await loadFileAttachments(account, event, log);
         const videos = extractVideos(event.message);
         const recordSegments = extractRecordSegments(event.message);
 

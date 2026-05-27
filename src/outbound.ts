@@ -258,6 +258,29 @@ export async function getFile(
   return ensureApiSuccess(await callOneBotApi(account, 'get_file', body), 'get_file');
 }
 
+export async function getPrivateFileUrl(
+  account: ResolvedOneBotAccount,
+  fileId: string,
+): Promise<OneBotApiResponse> {
+  return ensureApiSuccess(await callOneBotApi(account, 'get_private_file_url', {
+    file_id: fileId,
+  }), 'get_private_file_url');
+}
+
+export async function getGroupFileUrl(
+  account: ResolvedOneBotAccount,
+  groupId: string | number,
+  fileId: string,
+  busid?: string | number,
+): Promise<OneBotApiResponse> {
+  const body: Record<string, unknown> = {
+    group_id: normalizeMessageRef(groupId),
+    file_id: fileId,
+  };
+  if (busid != null && String(busid).trim()) body.busid = normalizeMessageRef(busid);
+  return ensureApiSuccess(await callOneBotApi(account, 'get_group_file_url', body), 'get_group_file_url');
+}
+
 export async function getStatus(account: ResolvedOneBotAccount): Promise<OneBotApiResponse> {
   return ensureApiSuccess(await callOneBotApi(account, 'get_status', {}), 'get_status');
 }
