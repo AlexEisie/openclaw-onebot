@@ -21,16 +21,22 @@ const outboundMockState: {
   sendRecordError: Error | null;
   reactError: Error | null;
   reactResult: { ok: boolean; error?: string } | null;
+  getFileResult: any | null;
 } = {
   sendTextError: null,
   sendImageError: null,
   sendRecordError: null,
   reactError: null,
   reactResult: null,
+  getFileResult: null,
 };
 vi.mock('../src/outbound.js', () => {
   return {
     getMessage: async () => ({ status: 'ok', retcode: 0, data: {} }),
+    getFile: async (account: any, fileRef: any) => {
+      outboundCalls.push({ kind: 'getFile', args: [account, fileRef] });
+      return outboundMockState.getFileResult ?? { status: 'ok', retcode: 0, data: {} };
+    },
     sendText: async (args: any) => {
       if (outboundMockState.sendTextError) {
         throw outboundMockState.sendTextError;
@@ -79,6 +85,7 @@ describe('gateway', () => {
     outboundMockState.sendRecordError = null;
     outboundMockState.reactError = null;
     outboundMockState.reactResult = null;
+    outboundMockState.getFileResult = null;
     runtimeState = createMockRuntime({
       nextDeliverPayload: { text: 'reply-from-agent', mediaUrls: ['file:///tmp/x.png'] },
     });
@@ -542,6 +549,82 @@ describe('gateway', () => {
     expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrls).toEqual([imageUrl]);
     expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
     expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(`[Image: ${imageUrl}]`))).toBe(true);
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+  });
+
+  it('loads NapCat file messages as inbound media and text content', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+    const infoLogs: string[] = [];
+    const fileText = '请按这里的内容修改配置';
+    outboundMockState.getFileResult = {
+      status: 'ok',
+      retcode: 0,
+      data: {
+        file: '/app/napcat/files/modify.txt',
+        file_name: '修改.txt',
+        file_size: 91,
+        base64: Buffer.from(fileText, 'utf8').toString('base64'),
+      },
+    };
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: (msg) => infoLogs.push(msg), error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'private',
+      sub_type: 'friend',
+      message_id: 120,
+      user_id: 1987460907,
+      message: [
+        {
+          type: 'file',
+          data: {
+            file: '修改.txt',
+            file_id: '2b3f7676f95b09df4de35ea1c783c368_30e30d96',
+            file_size: '91',
+          },
+        },
+      ],
+      raw_message: '[CQ:file,file=修改.txt,file_id=2b3f7676f95b09df4de35ea1c783c368_30e30d96,file_size=91]',
+      sender: { user_id: 1987460907, nickname: 'Alex Eisie' },
+      self_id: 3569793910,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
+    }, WAIT_FOR_BATCH);
+
+    expect(outboundCalls.some((call) => call.kind === 'getFile')).toBe(true);
+    expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe('/app/napcat/files/modify.txt');
+    expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('text/plain');
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File: 修改.txt 91 bytes]');
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(fileText);
+    expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(fileText))).toBe(true);
 
     ac.abort();
     await runP;

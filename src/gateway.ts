@@ -8,7 +8,7 @@ import type {
   OneBotMessageSegment,
 } from "./types.js";
 import { getOneBotRuntime } from "./runtime.js";
-import { getMessage, reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
+import { getFile, getMessage, reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
 import { cleanupVoiceFiles, processVoiceSegments } from "./voice.js";
 export {
   cleanupVoiceFiles,
@@ -54,6 +54,14 @@ export interface OneBotImageAttachment {
   subType?: string;
 }
 
+export interface OneBotFileAttachment {
+  name: string;
+  source?: string;
+  contentType: string;
+  size?: number;
+  text?: string;
+}
+
 interface InboundMediaEntry {
   source: string;
   type: string;
@@ -94,6 +102,40 @@ function inferImageMimeType(img: OneBotImageAttachment): string {
   if (source.endsWith(".heic")) return "image/heic";
   if (source.endsWith(".heif")) return "image/heif";
   return "image/png";
+}
+
+function inferFileMimeType(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".txt") || lower.endsWith(".log")) return "text/plain";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "text/markdown";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".csv")) return "text/csv";
+  if (lower.endsWith(".html") || lower.endsWith(".htm")) return "text/html";
+  if (lower.endsWith(".xml")) return "application/xml";
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".zip")) return "application/zip";
+  if (lower.endsWith(".doc")) return "application/msword";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  return "application/octet-stream";
+}
+
+function isTextFileContentType(contentType: string): boolean {
+  return contentType.startsWith("text/")
+    || contentType === "application/json"
+    || contentType === "application/xml";
+}
+
+function extractFileDataFromApiResponse(result: OneBotApiResponse): Record<string, unknown> {
+  return result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
+}
+
+function decodeBase64Text(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    return Buffer.from(value, "base64").toString("utf8").trim();
+  } catch {
+    return undefined;
+  }
 }
 
 export function extractTextForEvent(event: OneBotMessageEvent): string {
@@ -210,6 +252,53 @@ export function extractImageAttachments(segments: OneBotMessageSegment[]): OneBo
     .filter((attachment) => attachment.source);
 }
 
+export async function loadFileAttachments(
+  account: ResolvedOneBotAccount,
+  segments: OneBotMessageSegment[],
+  log?: GatewayContext["log"],
+): Promise<OneBotFileAttachment[]> {
+  const attachments: OneBotFileAttachment[] = [];
+
+  for (const seg of segments.filter((segment) => segment.type === "file")) {
+    const name = segmentString(seg.data.name ?? seg.data.file) ?? "file";
+    const fileId = segmentString(seg.data.file_id ?? seg.data.fileId);
+    const file = segmentString(seg.data.file);
+    const declaredSize = Number(seg.data.file_size ?? seg.data.fileSize);
+    const contentType = inferFileMimeType(name);
+    const attachment: OneBotFileAttachment = {
+      name,
+      contentType,
+      ...(Number.isFinite(declaredSize) ? { size: declaredSize } : {}),
+    };
+
+    if (!fileId && !file) {
+      attachments.push(attachment);
+      continue;
+    }
+
+    try {
+      const result = await getFile(account, { fileId, file });
+      const data = extractFileDataFromApiResponse(result);
+      const url = segmentString(data.url);
+      const path = segmentString(data.file ?? data.path);
+      attachment.source = url ?? path;
+      const loadedName = segmentString(data.file_name ?? data.fileName ?? data.name);
+      if (loadedName) attachment.name = loadedName;
+      const loadedSize = Number(data.file_size ?? data.fileSize);
+      if (Number.isFinite(loadedSize)) attachment.size = loadedSize;
+      if (isTextFileContentType(attachment.contentType) && (attachment.size ?? 0) <= 64 * 1024) {
+        attachment.text = decodeBase64Text(data.base64);
+      }
+    } catch (err) {
+      log?.debug?.(`[onebot:${account.accountId}] Failed to load file ${fileId ?? file ?? name}: ${String(err)}`);
+    }
+
+    attachments.push(attachment);
+  }
+
+  return attachments;
+}
+
 export function extractImages(segments: OneBotMessageSegment[]): string[] {
   return extractImageAttachments(segments).map((attachment) => attachment.source);
 }
@@ -265,6 +354,7 @@ interface BufferedMessage {
   replyContextText: string[];
   images: string[];
   imageAttachments: OneBotImageAttachment[];
+  fileAttachments: OneBotFileAttachment[];
   videos: string[];
   recordSegments: OneBotMessageSegment[];
 }
@@ -416,6 +506,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const combinedReplyContextText = messages.flatMap((m) => m.replyContextText).filter(Boolean).join("\n");
         const combinedImages = messages.flatMap((m) => m.images);
         const combinedImageAttachments = messages.flatMap((m) => m.imageAttachments);
+        const combinedFileAttachments = messages.flatMap((m) => m.fileAttachments);
         const combinedVideos = messages.flatMap((m) => m.videos);
         const combinedRecordSegs = messages.flatMap((m) => m.recordSegments);
 
@@ -457,6 +548,13 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         }
         for (const video of combinedVideos) {
           attachmentInfo += `\n[Video: ${video}]`;
+        }
+        for (const file of combinedFileAttachments) {
+          const suffix = file.size != null ? ` ${file.size} bytes` : "";
+          attachmentInfo += `\n[File: ${file.name}${suffix}]`;
+          if (file.text) {
+            attachmentInfo += `\n${file.text}`;
+          }
         }
         if (voiceMedia.length > 0) {
           attachmentInfo += "\n<media:audio>";
@@ -501,6 +599,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             source: img.url ?? img.file ?? img.source,
             type: inferImageMimeType(img),
           })),
+          ...combinedFileAttachments
+            .filter((file): file is OneBotFileAttachment & { source: string } => Boolean(file.source))
+            .map((file) => ({ source: file.source, type: file.contentType })),
           ...voiceMedia.map((v) => ({ source: v.path, type: v.contentType })),
         ].filter((entry) => entry.source);
         const mediaPayload: Record<string, unknown> = {};
@@ -702,6 +803,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         ];
         const replyContextText = replyContexts.map((context) => context.text).filter((text): text is string => Boolean(text));
         const images = imageAttachments.map((attachment) => attachment.source);
+        const fileAttachments = await loadFileAttachments(account, event.message, log);
         const videos = extractVideos(event.message);
         const recordSegments = extractRecordSegments(event.message);
 
@@ -747,7 +849,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           ? `group:${event.group_id}::${senderId}`
           : `private:${senderId}`;
 
-        const buffered: BufferedMessage = { event, text, replyContextText, images, imageAttachments, videos, recordSegments };
+        const buffered: BufferedMessage = { event, text, replyContextText, images, imageAttachments, fileAttachments, videos, recordSegments };
 
         const existing = chatBatches.get(batchKey);
         if (existing) {

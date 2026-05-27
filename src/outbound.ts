@@ -248,6 +248,16 @@ export async function getMessage(
   }), 'get_msg');
 }
 
+export async function getFile(
+  account: ResolvedOneBotAccount,
+  fileRef: { fileId?: string; file?: string },
+): Promise<OneBotApiResponse> {
+  const body: Record<string, unknown> = {};
+  if (fileRef.fileId) body.file_id = fileRef.fileId;
+  if (fileRef.file) body.file = fileRef.file;
+  return ensureApiSuccess(await callOneBotApi(account, 'get_file', body), 'get_file');
+}
+
 export async function getStatus(account: ResolvedOneBotAccount): Promise<OneBotApiResponse> {
   return ensureApiSuccess(await callOneBotApi(account, 'get_status', {}), 'get_status');
 }
