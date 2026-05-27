@@ -10,6 +10,7 @@ vi.mock('../src/runtime.js', () => ({
 }));
 
 vi.mock('../src/outbound.js', () => ({
+  getMessage: async () => ({ status: 'ok', retcode: 0, data: {} }),
   sendText: async () => ({ channel: 'onebot', messageId: 'm1' }),
   sendImage: async () => ({ status: 'ok', retcode: 0, data: {} }),
   sendRecord: async () => ({ status: 'ok', retcode: 0, data: {} }),

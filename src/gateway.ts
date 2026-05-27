@@ -2,12 +2,13 @@ import WebSocket from "ws";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type {
   ResolvedOneBotAccount,
+  OneBotApiResponse,
   OneBotEvent,
   OneBotMessageEvent,
   OneBotMessageSegment,
 } from "./types.js";
 import { getOneBotRuntime } from "./runtime.js";
-import { reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
+import { getMessage, reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
 import { cleanupVoiceFiles, processVoiceSegments } from "./voice.js";
 export {
   cleanupVoiceFiles,
@@ -63,6 +64,42 @@ function formatAtSegment(data: Record<string, unknown>): string {
   const label = qq === "all" ? "all" : qq;
   const name = segmentString(data.name);
   return name ? `[at:${label} ${name}]` : `[at:${label}]`;
+}
+
+function extractReplyMessageIds(segments: OneBotMessageSegment[]): Array<string | number> {
+  return segments
+    .filter((seg) => seg.type === "reply")
+    .map((seg) => seg.data.id)
+    .filter((id): id is string | number => typeof id === "string" || typeof id === "number");
+}
+
+function readMessageSegmentsFromApiResponse(result: OneBotApiResponse): OneBotMessageSegment[] {
+  const data = result.data as { message?: unknown } | null;
+  return Array.isArray(data?.message) ? data.message as OneBotMessageSegment[] : [];
+}
+
+async function extractRepliedImageAttachments(
+  account: ResolvedOneBotAccount,
+  segments: OneBotMessageSegment[],
+  log?: GatewayContext["log"],
+): Promise<OneBotImageAttachment[]> {
+  const seen = new Set<string>();
+  const attachments: OneBotImageAttachment[] = [];
+
+  for (const messageId of extractReplyMessageIds(segments)) {
+    const dedupeKey = String(messageId);
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    try {
+      const result = await getMessage(account, messageId);
+      attachments.push(...extractImageAttachments(readMessageSegmentsFromApiResponse(result)));
+    } catch (err) {
+      log?.debug?.(`[onebot:${account.accountId}] Failed to load replied message ${dedupeKey}: ${String(err)}`);
+    }
+  }
+
+  return attachments;
 }
 
 export function extractText(segments: OneBotMessageSegment[]): string {
@@ -568,13 +605,16 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         await withSessionLock(sessionLocks, sessionKey, () => dispatchMessagesUnlocked(batchKey, messages));
       };
 
-      const bufferMessage = (event: OneBotMessageEvent) => {
+      const bufferMessage = async (event: OneBotMessageEvent) => {
         const isGroup = event.message_type === "group";
         const senderId = String(event.user_id);
         const senderName = event.sender.card || event.sender.nickname || senderId;
         const text = extractText(event.message) || event.raw_message;
-        const imageAttachments = extractImageAttachments(event.message);
-        const images = extractImages(event.message);
+        const imageAttachments = [
+          ...extractImageAttachments(event.message),
+          ...await extractRepliedImageAttachments(account, event.message, log),
+        ];
+        const images = imageAttachments.map((attachment) => attachment.source);
         const videos = extractVideos(event.message);
         const recordSegments = extractRecordSegments(event.message);
 
@@ -706,7 +746,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               break;
 
             case "message":
-              bufferMessage(event as OneBotMessageEvent);
+              bufferMessage(event as OneBotMessageEvent).catch((err) => {
+                log?.error(`[onebot:${account.accountId}] Message buffer error: ${err}`);
+              });
               break;
 
             case "notice":

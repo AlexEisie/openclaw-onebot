@@ -8,6 +8,7 @@ vi.mock('../src/runtime.js', () => ({
 
 const sentTexts: string[] = [];
 vi.mock('../src/outbound.js', () => ({
+  getMessage: async () => ({ status: 'ok', retcode: 0, data: {} }),
   sendText: async ({ text }: any) => {
     sentTexts.push(String(text));
     return { channel: 'onebot', messageId: 'm1' };

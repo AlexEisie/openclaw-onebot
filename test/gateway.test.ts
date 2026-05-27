@@ -30,6 +30,7 @@ const outboundMockState: {
 };
 vi.mock('../src/outbound.js', () => {
   return {
+    getMessage: async () => ({ status: 'ok', retcode: 0, data: {} }),
     sendText: async (args: any) => {
       if (outboundMockState.sendTextError) {
         throw outboundMockState.sendTextError;

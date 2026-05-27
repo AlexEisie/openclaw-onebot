@@ -192,6 +192,87 @@ describe('e2e', () => {
     await httpServer.close();
   });
 
+  it('loads images from the OneBot message being replied to', async () => {
+    const httpServer = await startMockOneBotHttpServer({
+      handler: (req) => {
+        if (req.url === '/get_msg') {
+          return {
+            status: 'ok',
+            retcode: 0,
+            data: {
+              message_id: 9001,
+              message: [
+                { type: 'image', data: { url: 'https://img.example/replied.png', summary: 'photo' } },
+              ],
+            },
+          };
+        }
+        return undefined;
+      },
+    });
+    const wsServer = await startMockOneBotWsServer();
+
+    const { startGateway } = await import('../src/gateway.js');
+
+    const ac = new AbortController();
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: httpServer.baseUrl,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: () => {}, error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 2004,
+      user_id: 3004,
+      group_id: 4004,
+      message: [
+        { type: 'reply', data: { id: 9001 } },
+        { type: 'at', data: { qq: 999 } },
+        { type: 'text', data: { text: 'can you see it?' } },
+      ],
+      raw_message: '[CQ:reply,id=9001][CQ:at,qq=999] can you see it?',
+      sender: { user_id: 3004, nickname: 'ReplyImageUser' },
+      self_id: 999,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastEnvelopeArgs).not.toBeNull();
+    }, { timeout: 5000 });
+
+    expect(httpServer.requests.some((req) => req.url === '/get_msg')).toBe(true);
+    expect(runtimeState.state.lastEnvelopeArgs.imageUrls).toEqual(['https://img.example/replied.png']);
+    expect(runtimeState.state.lastEnvelopeArgs.imageAttachments).toEqual([
+      {
+        source: 'https://img.example/replied.png',
+        url: 'https://img.example/replied.png',
+        summary: 'photo',
+      },
+    ]);
+    expect(runtimeState.state.lastEnvelopeArgs.body).toContain('[Image: https://img.example/replied.png photo]');
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+    await httpServer.close();
+  });
+
   it('block streaming sends multiple QQ messages in order', async () => {
     runtimeState = createMockRuntime({
       nextDeliverPayloads: [
