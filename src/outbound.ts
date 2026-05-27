@@ -89,6 +89,10 @@ function stripFileScheme(filePath: string): string {
   return filePath.replace(/^file:\/\//i, '');
 }
 
+function isRemoteHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 function toFileUri(filePath: string): string {
   return filePath.startsWith('file://') ? filePath : `file://${filePath}`;
 }
@@ -212,6 +216,18 @@ export async function sendMessageSegments(
     ...resolveSendMsgTarget(target),
     message,
   }), 'send_msg');
+}
+
+export async function buildImageSegment(
+  account: ResolvedOneBotAccount,
+  filePathOrUrl: string,
+): Promise<OneBotMessageSegment> {
+  const source = filePathOrUrl.trim();
+  const mediaUri = isRemoteHttpUrl(source)
+    ? source
+    : await resolveNapCatMediaUri(account, source, 'images');
+
+  return { type: 'image', data: { file: mediaUri } };
 }
 
 export async function deleteMessage(
@@ -374,10 +390,7 @@ export async function sendImage(
   targetId: number,
   filePath: string,
 ): Promise<OneBotApiResponse> {
-  const mediaUri = await resolveNapCatMediaUri(account, filePath, 'images');
-  const message: OneBotMessageSegment[] = [
-    { type: 'image', data: { file: mediaUri } },
-  ];
+  const message: OneBotMessageSegment[] = [await buildImageSegment(account, filePath)];
 
   const endpoint = targetType === 'private' ? 'send_private_msg' : 'send_group_msg';
   const idField = targetType === 'private' ? 'user_id' : 'group_id';

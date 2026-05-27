@@ -37,7 +37,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 📣 群聊默认仅响应 @ 机器人的消息，可用 `groupRequireMention` 关闭
 - 🧩 OneBot v11 通用消息段、消息撤回/查询、群信息与基础群管理 action
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
-- ✅ 128 个测试用例全部通过
+- ✅ 130 个测试用例全部通过
 - 📈 覆盖率可通过 `npm run coverage` 复核
 
 ### 架构
@@ -271,7 +271,7 @@ services:
 
 ```bash
 npm install
-npm test          # 128 tests
+npm test          # 130 tests
 npm run build     # 编译 TypeScript
 npm run coverage  # 覆盖率报告
 npm run sync:openclaw-cli  # 审查后重新同步 OpenClaw CLI 的 shared-dir 参数
@@ -318,16 +318,16 @@ Note:
 - 🌊 **Block streaming** — OpenClaw partial replies arrive as multiple QQ messages
 - 🎤 **Full voice pipeline** — QQ voice (SILK/AMR) → MP3 → STT → TTS → send QQ voice
 - 📦 **Message batching** — auto-merge rapid messages within 1.5s (Telegram-style)
-- 🖼️ Image, audio, and file attachments
+- 🖼️ Image, @ mention, audio, and file attachments
 - 🛠️ Generic `sendMedia` outbound adapter so delivery recovery, mirror, and message-tool paths can all send images, audio, and files
 - 🔄 WebSocket auto-reconnect with exponential backoff
 - 🔒 Optional access token authentication
 - 🎯 `allowFrom` filtering (private/group/user-level)
 - 📣 Group chats only respond to @ mentions by default; set `groupRequireMention` to `false` to receive all group messages
-- 🧩 OneBot v11 message segments, delete/query APIs, group info, and basic group-management actions
+- 🧩 OneBot v11 message segments, mixed reply/@/image sends, delete/query APIs, group info, and basic group-management actions
 - 🧭 OpenClaw text-command support for authorized senders (`/status`, `/help`, `/commands`, `/model`, `/new`, `/reset`, etc.)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
-- ✅ 128 tests passing
+- ✅ 130 tests passing
 - 📈 Coverage can be re-generated with `npm run coverage`
 
 ### Quick Start
@@ -500,7 +500,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ```bash
 npm install
-npm test          # Run 128 tests
+npm test          # Run 130 tests
 npm run build     # Compile TypeScript
 npm run coverage  # Coverage report
 npm run sync:openclaw-cli  # Re-apply shared-dir CLI wiring after review

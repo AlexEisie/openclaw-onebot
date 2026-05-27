@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   cleanupVoiceFiles,
   downloadVoiceFile,
+  extractImageAttachments,
   extractImages,
   extractRecordSegments,
   extractText,
@@ -36,19 +37,32 @@ describe('gateway helpers', () => {
     const segments = [
       { type: 'text', data: { text: 'hello' } },
       { type: 'at', data: { qq: 999 } },
+      { type: 'at', data: { qq: 'all' } },
       { type: 'face', data: { id: 14 } },
       { type: 'reply', data: { id: 123 } },
-      { type: 'image', data: { url: 'https://img.example/x.png' } },
+      { type: 'image', data: { url: 'https://img.example/x.png', summary: 'photo' } },
       { type: 'record', data: { file: 'voice.amr' } },
       { type: 'video', data: { url: 'https://video.example/v.mp4' } },
       { type: 'text', data: { text: ' world' } },
-      { type: 'image', data: { file: 'fallback.png' } },
+      { type: 'image', data: { file: 'fallback.png', sub_type: 'flash' } },
     ] as any;
 
-    expect(extractText(segments)).toBe('hello[at:999][face:14][reply:123][Video: https://video.example/v.mp4] world');
+    expect(extractText(segments)).toBe('hello[at:999][at:all][face:14][reply:123][Video: https://video.example/v.mp4] world');
     expect(extractImages(segments)).toEqual([
       'https://img.example/x.png',
       'fallback.png',
+    ]);
+    expect(extractImageAttachments(segments)).toEqual([
+      {
+        source: 'https://img.example/x.png',
+        url: 'https://img.example/x.png',
+        summary: 'photo',
+      },
+      {
+        source: 'fallback.png',
+        file: 'fallback.png',
+        subType: 'flash',
+      },
     ]);
     expect(extractRecordSegments(segments)).toHaveLength(1);
   });

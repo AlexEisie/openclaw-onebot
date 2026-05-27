@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
+  buildImageSegment,
   deleteMessage,
   getGroupInfo,
   getGroupList,
@@ -18,6 +19,7 @@ const {
   setGroupLeave,
   uploadFile,
 } = vi.hoisted(() => ({
+  buildImageSegment: vi.fn(),
   deleteMessage: vi.fn(),
   getGroupInfo: vi.fn(),
   getGroupList: vi.fn(),
@@ -37,6 +39,7 @@ const {
 }));
 
 vi.mock('../src/outbound.js', () => ({
+  buildImageSegment,
   deleteMessage,
   getGroupInfo,
   getGroupList,
@@ -65,6 +68,7 @@ import { onebotPlugin } from '../src/channel.js';
 
 describe('channel actions', () => {
   beforeEach(() => {
+    buildImageSegment.mockReset();
     deleteMessage.mockReset();
     getGroupInfo.mockReset();
     getGroupList.mockReset();
@@ -81,6 +85,10 @@ describe('channel actions', () => {
     setGroupKick.mockReset();
     setGroupLeave.mockReset();
     uploadFile.mockReset();
+    buildImageSegment.mockImplementation(async (_account, source) => ({
+      type: 'image',
+      data: { file: String(source).startsWith('http') ? source : `file://${source}` },
+    }));
   });
 
   afterEach(() => {
@@ -251,6 +259,58 @@ describe('channel actions', () => {
 
     expect(deleted.details).toMatchObject({ ok: true, channel: 'onebot', action: 'unsend' });
     expect(deleteMessage).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'default' }), '99');
+  });
+
+  it('sends reply actions with mentions and images as OneBot segments', async () => {
+    sendMessageSegments.mockResolvedValueOnce({
+      status: 'ok',
+      retcode: 0,
+      data: { message_id: 78 },
+    });
+
+    const reply = await onebotPlugin.actions!.handleAction!({
+      action: 'reply',
+      cfg: {
+        channels: {
+          onebot: {
+            wsUrl: 'ws://127.0.0.1:3000',
+            httpUrl: 'http://127.0.0.1:3001',
+          },
+        },
+      },
+      params: {
+        to: 'group:42',
+        message_id: '11',
+        mentions: ['10001', '10002'],
+        text: 'see this',
+        imageUrls: ['https://img.example/a.png'],
+        mediaUrl: '/tmp/local.png',
+      },
+      accountId: 'default',
+      toolContext: {},
+    } as any);
+
+    expect(reply.details).toMatchObject({ ok: true, channel: 'onebot', action: 'reply' });
+    expect(buildImageSegment).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      'https://img.example/a.png',
+    );
+    expect(buildImageSegment).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      '/tmp/local.png',
+    );
+    expect(sendMessageSegments).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      { type: 'group', id: 42 },
+      [
+        { type: 'reply', data: { id: '11' } },
+        { type: 'at', data: { qq: '10001' } },
+        { type: 'at', data: { qq: '10002' } },
+        { type: 'text', data: { text: 'see this' } },
+        { type: 'image', data: { file: 'https://img.example/a.png' } },
+        { type: 'image', data: { file: 'file:///tmp/local.png' } },
+      ],
+    );
   });
 
   it('handles OneBot info and group management actions', async () => {

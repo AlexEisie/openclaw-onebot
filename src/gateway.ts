@@ -44,13 +44,34 @@ export interface GatewayContext {
 
 // ── Text / image extraction ──
 
+export interface OneBotImageAttachment {
+  source: string;
+  url?: string;
+  file?: string;
+  summary?: string;
+  subType?: string;
+}
+
+function segmentString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  const text = String(value);
+  return text ? text : undefined;
+}
+
+function formatAtSegment(data: Record<string, unknown>): string {
+  const qq = String(data.qq ?? "");
+  const label = qq === "all" ? "all" : qq;
+  const name = segmentString(data.name);
+  return name ? `[at:${label} ${name}]` : `[at:${label}]`;
+}
+
 export function extractText(segments: OneBotMessageSegment[]): string {
   return segments.map((seg) => {
     switch (seg.type) {
       case "text":
         return String(seg.data.text ?? "");
       case "at":
-        return `[at:${String(seg.data.qq ?? "")}]`;
+        return formatAtSegment(seg.data);
       case "face":
         return `[face:${String(seg.data.id ?? "")}]`;
       case "reply":
@@ -77,11 +98,27 @@ export function extractText(segments: OneBotMessageSegment[]): string {
   }).join("");
 }
 
-export function extractImages(segments: OneBotMessageSegment[]): string[] {
+export function extractImageAttachments(segments: OneBotMessageSegment[]): OneBotImageAttachment[] {
   return segments
     .filter((seg) => seg.type === "image")
-    .map((seg) => String(seg.data.url ?? seg.data.file ?? ""))
-    .filter(Boolean);
+    .map((seg) => {
+      const url = segmentString(seg.data.url);
+      const file = segmentString(seg.data.file);
+      const source = url ?? file ?? "";
+      const attachment: OneBotImageAttachment = { source };
+      if (url) attachment.url = url;
+      if (file) attachment.file = file;
+      const summary = segmentString(seg.data.summary);
+      if (summary) attachment.summary = summary;
+      const subType = segmentString(seg.data.sub_type ?? seg.data.subType);
+      if (subType) attachment.subType = subType;
+      return attachment;
+    })
+    .filter((attachment) => attachment.source);
+}
+
+export function extractImages(segments: OneBotMessageSegment[]): string[] {
+  return extractImageAttachments(segments).map((attachment) => attachment.source);
 }
 
 export function extractRecordSegments(segments: OneBotMessageSegment[]): OneBotMessageSegment[] {
@@ -133,6 +170,7 @@ interface BufferedMessage {
   event: OneBotMessageEvent;
   text: string;
   images: string[];
+  imageAttachments: OneBotImageAttachment[];
   videos: string[];
   recordSegments: OneBotMessageSegment[];
 }
@@ -282,6 +320,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         // Combine text, images, and record segments from all buffered messages
         const combinedText = messages.map((m) => m.text).filter(Boolean).join("\n");
         const combinedImages = messages.flatMap((m) => m.images);
+        const combinedImageAttachments = messages.flatMap((m) => m.imageAttachments);
         const combinedVideos = messages.flatMap((m) => m.videos);
         const combinedRecordSegs = messages.flatMap((m) => m.recordSegments);
 
@@ -317,8 +356,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         // Build text body — images as placeholders, voice handled via MediaPath
         let attachmentInfo = "";
-        for (const img of combinedImages) {
-          attachmentInfo += `\n[Image: ${img}]`;
+        for (const img of combinedImageAttachments) {
+          const suffix = img.summary ? ` ${img.summary}` : "";
+          attachmentInfo += `\n[Image: ${img.source}${suffix}]`;
         }
         for (const video of combinedVideos) {
           attachmentInfo += `\n[Video: ${video}]`;
@@ -344,6 +384,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           },
           envelope: envelopeOptions,
           ...(combinedImages.length > 0 ? { imageUrls: combinedImages } : {}),
+          ...(combinedImageAttachments.length > 0 ? { imageAttachments: combinedImageAttachments } : {}),
         });
 
         const fromAddress = isGroup
@@ -532,6 +573,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const senderId = String(event.user_id);
         const senderName = event.sender.card || event.sender.nickname || senderId;
         const text = extractText(event.message) || event.raw_message;
+        const imageAttachments = extractImageAttachments(event.message);
         const images = extractImages(event.message);
         const videos = extractVideos(event.message);
         const recordSegments = extractRecordSegments(event.message);
@@ -578,7 +620,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           ? `group:${event.group_id}::${senderId}`
           : `private:${senderId}`;
 
-        const buffered: BufferedMessage = { event, text, images, videos, recordSegments };
+        const buffered: BufferedMessage = { event, text, images, imageAttachments, videos, recordSegments };
 
         const existing = chatBatches.get(batchKey);
         if (existing) {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  buildImageSegment,
   deleteMessage,
   getGroupInfo,
   getGroupMemberInfo,
@@ -190,6 +191,29 @@ describe('outbound', () => {
       expect(statSync(staged).mode & 0o777).toBe(0o600);
       expect(statSync(join(sharedDir, 'openclaw', 'audio')).mode & 0o777).toBe(0o700);
     }
+  });
+
+  it('buildImageSegment: keeps remote image URLs and stages local files when needed', async () => {
+    expect(await buildImageSegment(mkAccount(), 'https://img.example/a.png')).toEqual({
+      type: 'image',
+      data: { file: 'https://img.example/a.png' },
+    });
+
+    const root = mkdtempSync(join(tmpdir(), 'onebot-image-segment-'));
+    const sharedDir = join(root, 'shared');
+    mkdirSync(sharedDir, { recursive: true });
+    const source = join(root, 'picture.png');
+    writeFileSync(source, 'image-bytes');
+
+    const segment = await buildImageSegment(
+      mkAccount({ config: { sharedDir, containerSharedDir: '/shared' } as any }),
+      source,
+    );
+
+    expect(segment.type).toBe('image');
+    expect(String(segment.data.file)).toMatch(/^file:\/\/\/shared\/openclaw\/images\//);
+    const rel = String(segment.data.file).replace('file:///shared/', '');
+    expect(readFileSync(join(sharedDir, rel), 'utf8')).toBe('image-bytes');
   });
 
   it('uploadFile: calls upload_group_file with file uri', async () => {

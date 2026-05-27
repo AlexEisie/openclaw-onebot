@@ -5,6 +5,7 @@ import type { ResolvedOneBotAccount, OneBotMessageSegment } from "./types.js";
 import { getDefaultContainerSharedDir, getDefaultSharedDir } from "./env.js";
 import { listOneBotAccountIds, resolveOneBotAccount, applyOneBotAccountConfig } from "./config.js";
 import {
+  buildImageSegment,
   deleteMessage,
   getFriendList,
   getGroupInfo,
@@ -97,12 +98,62 @@ function buildTextSegments(text?: string): OneBotMessageSegment[] {
   return trimmed ? [{ type: "text", data: { text: trimmed } }] : [];
 }
 
-function buildReplySegments(params: Record<string, unknown>): OneBotMessageSegment[] {
+function toArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : value == null ? [] : [value];
+}
+
+function readMentionParams(params: Record<string, unknown>): string[] {
+  const mentions = [
+    ...toArray(params.at),
+    ...toArray(params.mention),
+    ...toArray(params.mentions),
+    ...toArray(params.at_user_id),
+    ...toArray(params.atUserId),
+    ...toArray(params.at_user_ids),
+    ...toArray(params.atUserIds),
+    ...toArray(params.mention_user_id),
+    ...toArray(params.mentionUserId),
+    ...toArray(params.mention_user_ids),
+    ...toArray(params.mentionUserIds),
+  ]
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+
+  return [...new Set(mentions)];
+}
+
+function readImageParams(params: Record<string, unknown>): string[] {
+  const images = [
+    ...toArray(params.image),
+    ...toArray(params.images),
+    ...toArray(params.image_url),
+    ...toArray(params.imageUrl),
+    ...toArray(params.image_urls),
+    ...toArray(params.imageUrls),
+    ...toArray(params.mediaUrl),
+    ...toArray(params.mediaUrls),
+  ]
+    .map((value) => String(value).trim())
+    .filter(Boolean);
+
+  return [...new Set(images)];
+}
+
+async function buildReplySegments(
+  account: ResolvedOneBotAccount,
+  params: Record<string, unknown>,
+): Promise<OneBotMessageSegment[]> {
   const messageId = readStringParam(params, ["message_id", "messageId", "reply_to", "replyTo"]);
   const text = readStringParam(params, ["text", "body", "message"]);
   const segments: OneBotMessageSegment[] = [];
   if (messageId) segments.push({ type: "reply", data: { id: messageId } });
+  for (const qq of readMentionParams(params)) {
+    segments.push({ type: "at", data: { qq } });
+  }
   segments.push(...buildTextSegments(text));
+  for (const image of readImageParams(params)) {
+    segments.push(await buildImageSegment(account, image));
+  }
   return segments;
 }
 
@@ -298,13 +349,13 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
 
       if (action === "reply") {
         const to = readStringParam(params, ["to", "target"]) ?? toolContext?.currentChannelId;
-        const segments = buildReplySegments(params);
+        const segments = await buildReplySegments(account, params);
         if (!to || segments.length === 0) {
-          return createActionResult("OneBot reply requires `to` and reply text or message_id.", {
+          return createActionResult("OneBot reply requires `to` and at least one of reply text, message_id, mention, or image.", {
             ok: false,
             channel: "onebot",
             action,
-            error: "OneBot reply requires `to` and reply text or message_id.",
+            error: "OneBot reply requires `to` and at least one of reply text, message_id, mention, or image.",
           });
         }
         const result = await sendMessageSegments(account, parseTarget(to), segments);
