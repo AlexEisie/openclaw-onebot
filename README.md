@@ -29,12 +29,14 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🧭 **OpenClaw 文本命令支持** — 已授权来源可使用 `/status`、`/help`、`/commands`、`/model`、`/new`、`/reset` 等命令
 - 🎤 **语音完整链路** — QQ 语音 (SILK/AMR) → MP3 → STT → TTS → 发送 QQ 语音
 - 📦 **消息聚合** — 连续多条消息 1.5s 内自动合并（类似 Telegram 风格）
-- 🖼️ 图片、语音、文件附件发送
+- 🖼️ 入站图片作为 OpenClaw media (`MediaUrl` / `MediaUrls`) 传递，出站支持图片、语音、文件附件发送
 - 🛠️ 通用 `sendMedia` 出站适配，delivery recovery / mirror / message tool 等通路都能发送图片、语音、文件
 - 🔄 WebSocket 自动重连（指数退避）
 - 🔒 可选 access token 鉴权
 - 🎯 `allowFrom` 消息来源过滤（私聊/群聊/用户级别）
 - 📣 群聊默认仅响应 @ 机器人的消息，可用 `groupRequireMention` 关闭
+- 🏷️ 保留非机器人 @ 提及，上下文会以 `[mentioned user ...]` 传给 OpenClaw
+- 🪵 Gateway 日志会打印最终发给 OpenClaw 的源文本，便于排查图片、@、回复等消息段
 - 🧩 OneBot v11 通用消息段、消息撤回/查询、群信息与基础群管理 action
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
 - ✅ 135 个测试用例全部通过
@@ -178,6 +180,7 @@ openclaw gateway restart
 - **流式回复**
   - 这里支持的是 **OpenClaw block streaming**
   - QQ 端表现为连续多条分块消息，不是“编辑同一条消息”的 draft stream
+  - 如果 5 分钟内还没有首个 OpenClaw 回复，插件会先发送 `[OpenClaw] Request received, processing...`，并继续等待最终回复
   - 开启方式：
 
 ```json
@@ -210,6 +213,13 @@ openclaw gateway restart
 ```
 
 旧版 `channels.onebot.blockStreamingCoalesce` 仍兼容；新版 `openclaw doctor --fix` 会把它迁移到 `channels.onebot.streaming.block.coalesce`。
+
+### 入站图片与 @
+
+- OneBot `image` 段会传入 OpenClaw media 字段：首张图为 `MediaUrl`，多张图为 `MediaUrls`
+- 只有图片或 `@bot + 图片` 的消息会在 agent 文本中包含 `[Image: <url>]`
+- 群聊中 @ 其他人不会被丢弃，例如 `@bot @B 这个人在干什么` 会传为 `[mentioned user ... B] 这个人在干什么`
+- Gateway 会打印 `[onebot:<account>] OpenClaw source text:`，后面就是实际送入 OpenClaw 的最终源文本
 
 ### 验证
 
@@ -318,12 +328,14 @@ Note:
 - 🌊 **Block streaming** — OpenClaw partial replies arrive as multiple QQ messages
 - 🎤 **Full voice pipeline** — QQ voice (SILK/AMR) → MP3 → STT → TTS → send QQ voice
 - 📦 **Message batching** — auto-merge rapid messages within 1.5s (Telegram-style)
-- 🖼️ Image, @ mention, audio, and file attachments
+- 🖼️ Inbound images are passed as OpenClaw media (`MediaUrl` / `MediaUrls`); outbound image, audio, and file attachments are supported
 - 🛠️ Generic `sendMedia` outbound adapter so delivery recovery, mirror, and message-tool paths can all send images, audio, and files
 - 🔄 WebSocket auto-reconnect with exponential backoff
 - 🔒 Optional access token authentication
 - 🎯 `allowFrom` filtering (private/group/user-level)
 - 📣 Group chats only respond to @ mentions by default; set `groupRequireMention` to `false` to receive all group messages
+- 🏷️ Non-bot @ mentions are preserved as `[mentioned user ...]` context for OpenClaw
+- 🪵 Gateway logs the final source text sent to OpenClaw for debugging image, @ mention, and reply segments
 - 🧩 OneBot v11 message segments, mixed reply/@/image sends, delete/query APIs, group info, and basic group-management actions
 - 🧭 OpenClaw text-command support for authorized senders (`/status`, `/help`, `/commands`, `/model`, `/new`, `/reset`, etc.)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
@@ -426,6 +438,7 @@ End-to-end voice flow:
 - **Streaming replies**
   - This plugin supports **OpenClaw block streaming**
   - QQ receives multiple incremental messages instead of a single edited draft message
+  - If no first OpenClaw response arrives within 5 minutes, the plugin sends `[OpenClaw] Request received, processing...` and keeps waiting for the final reply
   - Enable it with:
 
 ```json
@@ -458,6 +471,13 @@ End-to-end voice flow:
 ```
 
 Legacy `channels.onebot.blockStreamingCoalesce` remains accepted; current `openclaw doctor --fix` migrates it to `channels.onebot.streaming.block.coalesce`.
+
+### Inbound Images and Mentions
+
+- OneBot `image` segments are forwarded to OpenClaw media fields: the first image is `MediaUrl`, and multiple images are `MediaUrls`
+- Image-only or `@bot + image` messages include `[Image: <url>]` in the agent-facing text
+- Group mentions of other users are preserved, so `@bot @B what is this person doing` reaches OpenClaw as `[mentioned user ... B] what is this person doing`
+- Gateway logs `[onebot:<account>] OpenClaw source text:` followed by the exact final source text sent to OpenClaw
 
 ### Verification
 

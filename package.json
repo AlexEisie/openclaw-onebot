@@ -13,11 +13,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xucheng/openclaw-onebot.git"
+    "url": "git+https://github.com/AlexEisie/openclaw-onebot.git"
   },
-  "homepage": "https://github.com/xucheng/openclaw-onebot#readme",
+  "homepage": "https://github.com/AlexEisie/openclaw-onebot#readme",
   "bugs": {
-    "url": "https://github.com/xucheng/openclaw-onebot/issues"
+    "url": "https://github.com/AlexEisie/openclaw-onebot/issues"
   },
   "author": "JerryXu",
   "license": "MIT",

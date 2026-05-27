@@ -78,7 +78,7 @@ After npm is published and the release commit is on `main`:
 VERSION="$(node -p 'require("./package.json").version')"
 TAG="v${VERSION}"
 git tag "${TAG}"
-git push origin main "${TAG}"
+git push fork main "${TAG}"
 gh release create "${TAG}" --title "${TAG}" --notes-file "docs/releases/${TAG}.md"
 ```
 
@@ -102,7 +102,7 @@ clawhub package publish .clawhub-plugin/openclaw-onebot-plugin \
   --name openclaw-onebot-plugin \
   --display-name "OpenClaw OneBot Plugin" \
   --version "${VERSION}" \
-  --source-repo xucheng/openclaw-onebot \
+  --source-repo AlexEisie/openclaw-onebot \
   --source-ref "v${VERSION}" \
   --source-commit "${SHA}" \
   --tags latest,openclaw,onebot,qq,napcat \
