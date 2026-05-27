@@ -192,7 +192,7 @@ describe('e2e', () => {
     await httpServer.close();
   });
 
-  it('loads images from the OneBot message being replied to', async () => {
+  it('loads context from the OneBot message being replied to', async () => {
     const httpServer = await startMockOneBotHttpServer({
       handler: (req) => {
         if (req.url === '/get_msg') {
@@ -201,7 +201,9 @@ describe('e2e', () => {
             retcode: 0,
             data: {
               message_id: 9001,
+              sender: { user_id: 3005, nickname: 'OriginalUser' },
               message: [
+                { type: 'text', data: { text: 'original message without bot mention' } },
                 { type: 'image', data: { url: 'https://img.example/replied.png', summary: 'photo' } },
               ],
             },
@@ -257,6 +259,8 @@ describe('e2e', () => {
     }, { timeout: 5000 });
 
     expect(httpServer.requests.some((req) => req.url === '/get_msg')).toBe(true);
+    expect(runtimeState.state.lastEnvelopeArgs.body).toContain('[replied message 9001 from OriginalUser]: original message without bot mention');
+    expect(runtimeState.state.lastEnvelopeArgs.body).toContain('can you see it?');
     expect(runtimeState.state.lastEnvelopeArgs.imageUrls).toEqual(['https://img.example/replied.png']);
     expect(runtimeState.state.lastEnvelopeArgs.imageAttachments).toEqual([
       {
@@ -265,6 +269,8 @@ describe('e2e', () => {
         summary: 'photo',
       },
     ]);
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[replied message 9001 from OriginalUser]: original message without bot mention');
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('can you see it?');
     expect(runtimeState.state.lastEnvelopeArgs.body).toContain('[Image: https://img.example/replied.png photo]');
 
     ac.abort();

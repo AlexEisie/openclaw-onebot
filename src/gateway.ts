@@ -59,6 +59,12 @@ interface InboundMediaEntry {
   type: string;
 }
 
+interface RepliedMessageContext {
+  messageId: string;
+  text?: string;
+  imageAttachments: OneBotImageAttachment[];
+}
+
 function segmentString(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = String(value);
@@ -112,13 +118,24 @@ function readMessageSegmentsFromApiResponse(result: OneBotApiResponse): OneBotMe
   return Array.isArray(data?.message) ? data.message as OneBotMessageSegment[] : [];
 }
 
-async function extractRepliedImageAttachments(
+function formatRepliedMessageText(messageId: string, result: OneBotApiResponse, segments: OneBotMessageSegment[]): string | undefined {
+  const text = extractText(segments).trim();
+  if (!text) return undefined;
+
+  const data = result.data as { sender?: { card?: unknown; nickname?: unknown; user_id?: unknown } } | null;
+  const sender = data?.sender;
+  const senderName = segmentString(sender?.card) ?? segmentString(sender?.nickname) ?? segmentString(sender?.user_id);
+  const from = senderName ? ` from ${senderName}` : "";
+  return `[replied message ${messageId}${from}]: ${text}`;
+}
+
+async function loadRepliedMessageContexts(
   account: ResolvedOneBotAccount,
   segments: OneBotMessageSegment[],
   log?: GatewayContext["log"],
-): Promise<OneBotImageAttachment[]> {
+): Promise<RepliedMessageContext[]> {
   const seen = new Set<string>();
-  const attachments: OneBotImageAttachment[] = [];
+  const contexts: RepliedMessageContext[] = [];
 
   for (const messageId of extractReplyMessageIds(segments)) {
     const dedupeKey = String(messageId);
@@ -127,13 +144,18 @@ async function extractRepliedImageAttachments(
 
     try {
       const result = await getMessage(account, messageId);
-      attachments.push(...extractImageAttachments(readMessageSegmentsFromApiResponse(result)));
+      const repliedSegments = readMessageSegmentsFromApiResponse(result);
+      contexts.push({
+        messageId: dedupeKey,
+        text: formatRepliedMessageText(dedupeKey, result, repliedSegments),
+        imageAttachments: extractImageAttachments(repliedSegments),
+      });
     } catch (err) {
       log?.debug?.(`[onebot:${account.accountId}] Failed to load replied message ${dedupeKey}: ${String(err)}`);
     }
   }
 
-  return attachments;
+  return contexts;
 }
 
 export function extractText(segments: OneBotMessageSegment[]): string {
@@ -240,6 +262,7 @@ export async function withSessionLock<T>(
 interface BufferedMessage {
   event: OneBotMessageEvent;
   text: string;
+  replyContextText: string[];
   images: string[];
   imageAttachments: OneBotImageAttachment[];
   videos: string[];
@@ -390,6 +413,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         // Combine text, images, and record segments from all buffered messages
         const combinedText = messages.map((m) => m.text).filter(Boolean).join("\n");
+        const combinedReplyContextText = messages.flatMap((m) => m.replyContextText).filter(Boolean).join("\n");
         const combinedImages = messages.flatMap((m) => m.images);
         const combinedImageAttachments = messages.flatMap((m) => m.imageAttachments);
         const combinedVideos = messages.flatMap((m) => m.videos);
@@ -441,7 +465,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           attachmentInfo += "\n[语音]";
         }
 
-        const userContent = combinedText + attachmentInfo;
+        const textWithReplyContext = [combinedReplyContextText, combinedText].filter(Boolean).join("\n");
+        const userContent = textWithReplyContext + attachmentInfo;
         const agentBody = userContent.trim() ? userContent : combinedText;
 
         const body = pluginRuntime.channel.reply.formatInboundEnvelope({
@@ -670,10 +695,12 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const senderId = String(event.user_id);
         const senderName = event.sender.card || event.sender.nickname || senderId;
         const text = extractTextForEvent(event) || event.raw_message;
+        const replyContexts = await loadRepliedMessageContexts(account, event.message, log);
         const imageAttachments = [
           ...extractImageAttachments(event.message),
-          ...await extractRepliedImageAttachments(account, event.message, log),
+          ...replyContexts.flatMap((context) => context.imageAttachments),
         ];
+        const replyContextText = replyContexts.map((context) => context.text).filter((text): text is string => Boolean(text));
         const images = imageAttachments.map((attachment) => attachment.source);
         const videos = extractVideos(event.message);
         const recordSegments = extractRecordSegments(event.message);
@@ -720,7 +747,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           ? `group:${event.group_id}::${senderId}`
           : `private:${senderId}`;
 
-        const buffered: BufferedMessage = { event, text, images, imageAttachments, videos, recordSegments };
+        const buffered: BufferedMessage = { event, text, replyContextText, images, imageAttachments, videos, recordSegments };
 
         const existing = chatBatches.get(batchKey);
         if (existing) {
