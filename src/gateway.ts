@@ -54,6 +54,11 @@ export interface OneBotImageAttachment {
   subType?: string;
 }
 
+interface InboundMediaEntry {
+  source: string;
+  type: string;
+}
+
 function segmentString(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = String(value);
@@ -72,6 +77,17 @@ function formatVisibleMention(data: Record<string, unknown>): string {
   const label = qq === "all" ? "all members" : qq;
   const name = segmentString(data.name);
   return name ? `[mentioned user ${label} ${name}]` : `[mentioned user ${label}]`;
+}
+
+function inferImageMimeType(img: OneBotImageAttachment): string {
+  const source = (img.file ?? img.url ?? img.source).toLowerCase();
+  if (source.endsWith(".jpg") || source.endsWith(".jpeg")) return "image/jpeg";
+  if (source.endsWith(".webp")) return "image/webp";
+  if (source.endsWith(".gif")) return "image/gif";
+  if (source.endsWith(".bmp")) return "image/bmp";
+  if (source.endsWith(".heic")) return "image/heic";
+  if (source.endsWith(".heif")) return "image/heif";
+  return "image/png";
 }
 
 export function extractTextForEvent(event: OneBotMessageEvent): string {
@@ -426,6 +442,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         }
 
         const userContent = combinedText + attachmentInfo;
+        const agentBody = userContent.trim() ? userContent : combinedText;
 
         const body = pluginRuntime.channel.reply.formatInboundEnvelope({
           channel: "OneBot",
@@ -453,21 +470,28 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           peerId,
         });
 
-        // Build media payload for the platform's unified audio pipeline
+        // Build media payload for OpenClaw's unified media pipeline.
+        const mediaEntries: InboundMediaEntry[] = [
+          ...combinedImageAttachments.map((img) => ({
+            source: img.url ?? img.file ?? img.source,
+            type: inferImageMimeType(img),
+          })),
+          ...voiceMedia.map((v) => ({ source: v.path, type: v.contentType })),
+        ].filter((entry) => entry.source);
         const mediaPayload: Record<string, unknown> = {};
+        if (mediaEntries.length > 0) {
+          mediaPayload.MediaUrl = mediaEntries[0].source;
+          mediaPayload.MediaType = mediaEntries[0].type;
+          mediaPayload.MediaUrls = mediaEntries.map((entry) => entry.source);
+          mediaPayload.MediaTypes = mediaEntries.map((entry) => entry.type);
+        }
         if (voiceMedia.length > 0) {
           mediaPayload.MediaPath = voiceMedia[0].path;
-          mediaPayload.MediaType = voiceMedia[0].contentType;
-          mediaPayload.MediaUrl = voiceMedia[0].path;
-          if (voiceMedia.length > 1) {
-            mediaPayload.MediaPaths = voiceMedia.map((v) => v.path);
-            mediaPayload.MediaTypes = voiceMedia.map((v) => v.contentType);
-            mediaPayload.MediaUrls = voiceMedia.map((v) => v.path);
-          }
         }
 
         const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
           Body: body,
+          BodyForAgent: agentBody,
           RawBody: combinedText,
           CommandBody: combinedText,
           From: fromAddress,

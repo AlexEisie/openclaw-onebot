@@ -475,6 +475,77 @@ describe('gateway', () => {
     await wsServer.close();
   });
 
+  it('passes NapCat group image mentions as inbound media', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: () => {}, error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    const imageUrl = 'https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=def';
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 119,
+      user_id: 1987460907,
+      group_id: 1084249155,
+      message: [
+        { type: 'at', data: { qq: '3569793910' } },
+        { type: 'text', data: { text: ' ' } },
+        {
+          type: 'image',
+          data: {
+            summary: '',
+            file: 'DFE7ACA8434C280F096C7E50CC153883.png',
+            sub_type: 0,
+            url: imageUrl,
+            file_size: '436658',
+          },
+        },
+      ],
+      raw_message: `[CQ:at,qq=3569793910] [CQ:image,file=DFE7ACA8434C280F096C7E50CC153883.png,url=${imageUrl}]`,
+      sender: { user_id: 1987460907, nickname: 'Alex Eisie', role: 'owner' },
+      self_id: 3569793910,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
+    }, WAIT_FOR_BATCH);
+
+    expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe(imageUrl);
+    expect(runtimeState.state.lastFinalizeArgs.MediaUrls).toEqual([imageUrl]);
+    expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('image/png');
+    expect(runtimeState.state.lastFinalizeArgs.MediaTypes).toEqual(['image/png']);
+    expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
+    expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrls).toEqual([imageUrl]);
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+  });
+
   it('can disable automatic group reactions via config', async () => {
     const wsServer = await startMockOneBotWsServer();
     const ac = new AbortController();
@@ -653,9 +724,11 @@ describe('gateway', () => {
     expect(runtimeState.state.lastEnvelopeArgs.body).toContain('[Image: http://img.local/test.png]');
     expect(runtimeState.state.lastEnvelopeArgs.body).toContain('<media:audio>');
     expect(runtimeState.state.lastFinalizeArgs.MediaPath).toBe(mp3Path);
-    expect(runtimeState.state.lastFinalizeArgs.MediaPaths).toEqual([mp3Path, wavPath]);
-    expect(runtimeState.state.lastFinalizeArgs.MediaTypes).toEqual(['audio/mpeg', 'audio/wav']);
-    expect(runtimeState.state.lastFinalizeArgs.MediaUrls).toEqual([mp3Path, wavPath]);
+    expect(runtimeState.state.lastFinalizeArgs.MediaPaths).toBeUndefined();
+    expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe('http://img.local/test.png');
+    expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('image/png');
+    expect(runtimeState.state.lastFinalizeArgs.MediaTypes).toEqual(['image/png', 'audio/mpeg', 'audio/wav']);
+    expect(runtimeState.state.lastFinalizeArgs.MediaUrls).toEqual(['http://img.local/test.png', mp3Path, wavPath]);
 
     ac.abort();
     await runP;
