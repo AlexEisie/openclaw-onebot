@@ -83,7 +83,7 @@ describe('gateway timeout + error handling', () => {
       time: Math.floor(Date.now() / 1000),
     });
 
-    // 1) flush message batching (1500ms) so dispatch starts
+    // 1) flush message batching so dispatch starts
     await vi.advanceTimersByTimeAsync(2000);
     // 2) trigger gateway response timeout (5 minutes)
     await vi.advanceTimersByTimeAsync(301_000);

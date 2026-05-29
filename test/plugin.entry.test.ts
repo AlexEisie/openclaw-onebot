@@ -76,6 +76,13 @@ describe('package compatibility metadata', () => {
     expect(packageJson.openclaw.setupEntry).toBe('./dist/setup-entry.js');
   });
 
+  it('keeps ws as a production runtime dependency for the OneBot websocket client', () => {
+    expect(packageJson.dependencies?.ws).toEqual(expect.any(String));
+    expect(packageJson.devDependencies?.ws).toBeUndefined();
+    expect(packageJson.bundledDependencies).toContain('ws');
+    expect(packageJson.bundleDependencies).toContain('ws');
+  });
+
   it('declares channel config metadata for every manifest channel', () => {
     expect(manifest.configSchema).toEqual({
       type: 'object',

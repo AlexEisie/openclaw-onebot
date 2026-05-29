@@ -86,7 +86,7 @@ vi.mock('../src/outbound.js', () => {
   };
 });
 
-// Batch gap is 1500ms — tests need longer waitFor timeouts
+// Keep a generous timeout around the short batch gap so slow CI can still observe dispatches.
 const WAIT_FOR_BATCH = { timeout: 5000 };
 
 describe('gateway', () => {
@@ -409,7 +409,7 @@ describe('gateway', () => {
       time: Math.floor(Date.now() / 1000),
     });
 
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 500));
     expect(runtimeState.state.lastDispatchArgs).toBeNull();
 
     wsServer.sendToAll({

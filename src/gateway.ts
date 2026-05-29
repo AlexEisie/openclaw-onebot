@@ -26,8 +26,8 @@ export {
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000, 60000];
 const MAX_RECONNECT_ATTEMPTS = 100;
 
-// Message batching — aligned with telegram text fragment gap
-const BATCH_GAP_MS = 1500;
+// Message batching — keep enough gap for rapid fragments without holding single messages long.
+export const BATCH_GAP_MS = 300;
 const BATCH_MAX_MESSAGES = 12;
 const BATCH_MAX_CHARS = 50000;
 const RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -277,6 +277,7 @@ interface BufferedMessage {
   fileAttachments: OneBotFileAttachment[];
   videos: string[];
   recordSegments: OneBotMessageSegment[];
+  receivedAt: number;
 }
 
 interface ChatBatch {
@@ -417,6 +418,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const first = messages[0];
         const last = messages[messages.length - 1];
         const event = first.event;
+        log?.debug?.(
+          `[onebot:${account.accountId}] Dispatching ${messages.length} buffered message(s) for ${batchKey} after ${Date.now() - first.receivedAt}ms`,
+        );
         const isGroup = event.message_type === "group";
         const senderId = String(event.user_id);
         const senderName = event.sender.card || event.sender.nickname || senderId;
@@ -712,20 +716,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       };
 
       const bufferMessage = async (event: OneBotMessageEvent) => {
+        const receivedAt = Date.now();
         const isGroup = event.message_type === "group";
         const senderId = String(event.user_id);
         const senderName = event.sender.card || event.sender.nickname || senderId;
         const text = extractTextForEvent(event) || event.raw_message;
-        const replyContexts = await loadRepliedMessageContexts(account, event.message, log);
-        const imageAttachments = [
-          ...extractImageAttachments(event.message),
-          ...replyContexts.flatMap((context) => context.imageAttachments),
-        ];
-        const replyContextText = replyContexts.map((context) => context.text).filter((text): text is string => Boolean(text));
-        const images = imageAttachments.map((attachment) => attachment.source);
-        const fileAttachments = await loadFileAttachments(account, event, log);
-        const videos = extractVideos(event.message);
-        const recordSegments = extractRecordSegments(event.message);
 
         // allowFrom check
         const peerId = isGroup ? `group:${event.group_id}` : `private:${senderId}`;
@@ -764,12 +759,40 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             });
         }
 
+        const hasReply = event.message.some((seg) => seg.type === "reply");
+        const hasFile = event.message.some((seg) => seg.type === "file");
+        const replyContextsPromise = hasReply
+          ? loadRepliedMessageContexts(account, event.message, log)
+          : Promise.resolve<RepliedMessageContext[]>([]);
+        const fileAttachmentsPromise = hasFile
+          ? loadFileAttachments(account, event, log)
+          : Promise.resolve<OneBotFileAttachment[]>([]);
+        const [replyContexts, fileAttachments] = await Promise.all([replyContextsPromise, fileAttachmentsPromise]);
+        const imageAttachments = [
+          ...extractImageAttachments(event.message),
+          ...replyContexts.flatMap((context) => context.imageAttachments),
+        ];
+        const replyContextText = replyContexts.map((context) => context.text).filter((text): text is string => Boolean(text));
+        const images = imageAttachments.map((attachment) => attachment.source);
+        const videos = extractVideos(event.message);
+        const recordSegments = extractRecordSegments(event.message);
+
         // Batch key: per-chat + per-sender for groups
         const batchKey = isGroup
           ? `group:${event.group_id}::${senderId}`
           : `private:${senderId}`;
 
-        const buffered: BufferedMessage = { event, text, replyContextText, images, imageAttachments, fileAttachments, videos, recordSegments };
+        const buffered: BufferedMessage = {
+          event,
+          text,
+          replyContextText,
+          images,
+          imageAttachments,
+          fileAttachments,
+          videos,
+          recordSegments,
+          receivedAt,
+        };
 
         const existing = chatBatches.get(batchKey);
         if (existing) {

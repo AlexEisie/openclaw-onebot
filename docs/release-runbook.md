@@ -56,6 +56,12 @@ Staged outputs:
 .clawhub-skill/openclaw-onebot/
 ```
 
+Before publishing the ClawHub package, confirm the staged package still declares the OneBot WebSocket runtime dependency:
+
+```bash
+node -e "const p=require('./.clawhub-plugin/openclaw-onebot-plugin/package.json'); if (!p.dependencies?.ws) throw new Error('missing dependencies.ws')"
+```
+
 ## npm Publish
 
 The npm owner publishes first from the repository root:
@@ -144,6 +150,7 @@ openclaw --profile release-smoke skills install openclaw-onebot
 ## Release Notes Checklist
 
 - `package.json`, `package-lock.json`, and `openclaw.plugin.json` carry the same version
+- `ws` stays in production `dependencies` for both the npm package and `.clawhub-plugin/openclaw-onebot-plugin/package.json`
 - npm package name is `openclaw-onebot`
 - ClawHub package payload name is `openclaw-onebot-plugin`
 - runtime manifest id stays `openclaw-onebot`

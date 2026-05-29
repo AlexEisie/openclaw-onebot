@@ -28,7 +28,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🌊 **Block streaming** — 支持 OpenClaw 分块回复，QQ 端会连续收到多条流式消息
 - 🧭 **OpenClaw 文本命令支持** — 已授权来源可使用 `/status`、`/help`、`/commands`、`/model`、`/new`、`/reset` 等命令
 - 🎤 **语音完整链路** — QQ 语音 (SILK/AMR) → MP3 → STT → TTS → 发送 QQ 语音
-- 📦 **消息聚合** — 连续多条消息 1.5s 内自动合并（类似 Telegram 风格）
+- 📦 **消息聚合** — 连续多条消息 300ms 内自动合并，避免单条消息长时间等待
 - 🖼️ 入站图片作为 OpenClaw media (`MediaUrl` / `MediaUrls`) 传递，出站支持图片、语音、文件附件发送
 - 🛠️ 通用 `sendMedia` 出站适配，delivery recovery / mirror / message tool 等通路都能发送图片、语音、文件
 - 🔄 WebSocket 自动重连（指数退避）
@@ -39,7 +39,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🪵 Gateway 日志会打印最终发给 OpenClaw 的源文本，便于排查图片、@、回复等消息段
 - 🧩 OneBot v11 通用消息段、消息撤回/查询、群信息与基础群管理 action
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
-- ✅ 135 个测试用例全部通过
+- ✅ 139 个测试用例全部通过
 - 📈 覆盖率可通过 `npm run coverage` 复核
 
 ### 架构
@@ -50,7 +50,7 @@ QQ 机器人框架 (NapCat / go-cqhttp)
   └── HTTP API  → 发送消息 (文字/图片/语音)
       ↕
 OpenClaw OneBot Plugin (ChannelPlugin)
-  ├── 消息聚合 (1.5s debounce)
+  ├── 消息聚合 (300ms debounce)
   ├── 语音处理 (SILK → pilk → PCM → ffmpeg → MP3)
   └── allowFrom 过滤
       ↕
@@ -67,18 +67,20 @@ OpenClaw Gateway (统一消息管线)
 #### 1. 安装插件
 
 ```bash
-# 推荐：直接安装已发布的 ClawHub payload
-openclaw plugins install clawhub:openclaw-onebot-plugin
+# 推荐：直接安装/覆盖已发布的 ClawHub payload
+openclaw plugins install clawhub:openclaw-onebot-plugin --force
 
 # 自动安装；默认不会修改本机 OpenClaw CLI dist
 bash scripts/install.sh
 
 # 或审查源码后手动准备本地发布包
 npm install && npm run prepare:clawhub:plugin
-openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin
+openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin --force
 ```
 
 `scripts/install.sh` 会先在源码仓库生成 `.clawhub-plugin/openclaw-onebot-plugin` 精简发布包，并优先通过 `openclaw plugins install` 写入新版插件安装索引；旧版 OpenClaw 会回退到手动复制安装。脚本默认不会修改 OpenClaw CLI dist；只有当你的 OpenClaw 构建缺少 `--shared-dir` / `--container-shared-dir` setup 参数时，才需要显式执行 `ONEBOT_SYNC_OPENCLAW_CLI=1 bash scripts/install.sh` 或 `npm run sync:openclaw-cli`。
+
+部署时必须让安装器处理运行时依赖：本插件直接 `import "ws"` 连接 OneBot WebSocket，`ws` 必须在插件的 production dependencies 中。不要只复制 `dist/` 到 OpenClaw 插件目录；如果你手动复制发布包，复制后需要在插件目录执行 `npm install --omit=dev --omit=peer --ignore-scripts`，否则 Gateway 启动时会报缺少 `ws`。
 
 #### 2. 配置
 
@@ -281,7 +283,7 @@ services:
 
 ```bash
 npm install
-npm test          # 135 tests
+npm test          # 139 tests
 npm run build     # 编译 TypeScript
 npm run coverage  # 覆盖率报告
 npm run sync:openclaw-cli  # 审查后重新同步 OpenClaw CLI 的 shared-dir 参数
@@ -327,7 +329,7 @@ Note:
 - 👍 **Automatic group reactions** — auto-react to inbound group messages with a configurable switch, disabled by default
 - 🌊 **Block streaming** — OpenClaw partial replies arrive as multiple QQ messages
 - 🎤 **Full voice pipeline** — QQ voice (SILK/AMR) → MP3 → STT → TTS → send QQ voice
-- 📦 **Message batching** — auto-merge rapid messages within 1.5s (Telegram-style)
+- 📦 **Message batching** — auto-merge rapid messages within 300ms without holding single messages long
 - 🖼️ Inbound images are passed as OpenClaw media (`MediaUrl` / `MediaUrls`); outbound image, audio, and file attachments are supported
 - 🛠️ Generic `sendMedia` outbound adapter so delivery recovery, mirror, and message-tool paths can all send images, audio, and files
 - 🔄 WebSocket auto-reconnect with exponential backoff
@@ -339,7 +341,7 @@ Note:
 - 🧩 OneBot v11 message segments, mixed reply/@/image sends, delete/query APIs, group info, and basic group-management actions
 - 🧭 OpenClaw text-command support for authorized senders (`/status`, `/help`, `/commands`, `/model`, `/new`, `/reset`, etc.)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
-- ✅ 135 tests passing
+- ✅ 139 tests passing
 - 📈 Coverage can be re-generated with `npm run coverage`
 
 ### Quick Start
@@ -347,18 +349,20 @@ Note:
 #### 1. Install
 
 ```bash
-# Recommended: install the published ClawHub payload
-openclaw plugins install clawhub:openclaw-onebot-plugin
+# Recommended: install or overwrite the published ClawHub payload
+openclaw plugins install clawhub:openclaw-onebot-plugin --force
 
 # Auto install; does not patch the local OpenClaw CLI dist by default
 bash scripts/install.sh
 
 # Or prepare a local payload after reviewing the source
 npm install && npm run prepare:clawhub:plugin
-openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin
+openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin --force
 ```
 
 `scripts/install.sh` prepares `.clawhub-plugin/openclaw-onebot-plugin` in the source repo first and prefers `openclaw plugins install` so current OpenClaw builds update the managed plugin install index. Older OpenClaw builds fall back to the legacy manual copy path. It no longer patches OpenClaw CLI dist by default; set `ONEBOT_SYNC_OPENCLAW_CLI=1` only after reviewing `scripts/sync-openclaw-cli.mjs` and confirming your OpenClaw build lacks the shared-dir setup flags.
+
+Let the installer resolve runtime dependencies during deployment. This plugin imports `ws` directly for the OneBot WebSocket connection, so `ws` must be installed from production dependencies. Do not copy only `dist/` into the OpenClaw plugin directory; if you manually copy the release payload, run `npm install --omit=dev --omit=peer --ignore-scripts` in the plugin directory before restarting the gateway.
 
 #### 2. Configure
 
@@ -520,7 +524,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ```bash
 npm install
-npm test          # Run 135 tests
+npm test          # Run 139 tests
 npm run build     # Compile TypeScript
 npm run coverage  # Coverage report
 npm run sync:openclaw-cli  # Re-apply shared-dir CLI wiring after review

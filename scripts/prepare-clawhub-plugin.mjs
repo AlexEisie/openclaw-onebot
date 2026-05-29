@@ -9,6 +9,10 @@ const basePackage = JSON.parse(await readFile(join(repoRoot, "package.json"), "u
 const manifest = JSON.parse(await readFile(join(repoRoot, "openclaw.plugin.json"), "utf8"));
 const outputRoot = join(repoRoot, ".clawhub-plugin", "openclaw-onebot-plugin");
 
+if (!basePackage.dependencies?.ws) {
+  throw new Error('Missing runtime dependency "ws"; OneBot WebSocket support imports it directly.');
+}
+
 function dereferenceJsonSchema(schema) {
   const root = JSON.parse(JSON.stringify(schema));
   const definitions = root.$defs ?? root.definitions ?? {};

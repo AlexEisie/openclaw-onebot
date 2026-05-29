@@ -4,6 +4,7 @@ import { startMockOneBotWsServer } from './helpers/mock-ws-server.js';
 let mockRuntime: any;
 let dispatchCount = 0;
 let lastCtx: any;
+const NO_DISPATCH_WAIT_MS = 500;
 
 vi.mock('../src/runtime.js', () => ({
   getOneBotRuntime: () => mockRuntime,
@@ -151,7 +152,7 @@ describe('gateway allowFrom', () => {
     wsServer.sendToAll(makePrivateMsg(222, 'blocked'));
 
     // Wait a bit — should NOT dispatch
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, NO_DISPATCH_WAIT_MS));
     expect(dispatchCount).toBe(0);
 
     ac.abort();
@@ -218,7 +219,7 @@ describe('gateway allowFrom', () => {
     await readyP;
     wsServer.sendToAll(makeGroupMsg(1, 200, 'blocked group'));
 
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, NO_DISPATCH_WAIT_MS));
     expect(dispatchCount).toBe(0);
 
     ac.abort();
@@ -323,7 +324,7 @@ describe('gateway allowFrom', () => {
 
     // Blocked private
     wsServer.sendToAll(makePrivateMsg(222, 'no'));
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, NO_DISPATCH_WAIT_MS));
     expect(dispatchCount).toBe(1); // still 1
 
     // Allowed group
@@ -332,7 +333,7 @@ describe('gateway allowFrom', () => {
 
     // Blocked group
     wsServer.sendToAll(makeGroupMsg(333, 300, 'no'));
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, NO_DISPATCH_WAIT_MS));
     expect(dispatchCount).toBe(2); // still 2
 
     ac.abort();
