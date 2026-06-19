@@ -32,6 +32,12 @@ export const BATCH_GAP_MS = 300;
 const BATCH_MAX_MESSAGES = 12;
 const BATCH_MAX_CHARS = 50000;
 const RESPONSE_TIMEOUT_MS = 5 * 60 * 1000;
+const EXPLICIT_GROUP_TRIGGER_SYSTEM_PROMPT = [
+  "This OneBot group message has already passed the explicit @/reply trigger gate.",
+  "Ignore any silent-reply or NO_REPLY policy for this turn.",
+  "Always send a normal visible reply to the user, even if the reply is brief.",
+  "Do not output NO_REPLY.",
+].join(" ");
 
 export interface GatewayContext {
   account: ResolvedOneBotAccount;
@@ -79,6 +85,8 @@ interface RepliedMessageContext {
   fileAttachments: OneBotFileAttachment[];
 }
 
+type OneBotGroupTriggerReason = "mention" | "reply";
+
 function segmentString(value: unknown): string | undefined {
   if (value == null) return undefined;
   const text = String(value);
@@ -119,6 +127,12 @@ function extractReplyMessageIds(segments: OneBotMessageSegment[]): Array<string 
 function readMessageSegmentsFromApiResponse(result: OneBotApiResponse): OneBotMessageSegment[] {
   const data = result.data as { message?: unknown } | null;
   return Array.isArray(data?.message) ? data.message as OneBotMessageSegment[] : [];
+}
+
+function readMessageSenderIdFromApiResponse(result: OneBotApiResponse): string | undefined {
+  const data = result.data as { sender?: { user_id?: unknown }, user_id?: unknown } | null;
+  const senderId = data?.sender?.user_id ?? data?.user_id;
+  return senderId == null ? undefined : String(senderId);
 }
 
 function isHttpUrl(value: string): boolean {
@@ -275,6 +289,58 @@ export function isMentioningSelf(event: OneBotMessageEvent): boolean {
   );
 }
 
+function buildGroupSystemPrompt(params: {
+  configuredPrompt?: string;
+  requireVisibleReply: boolean;
+}): string | undefined {
+  const parts = [
+    params.configuredPrompt?.trim(),
+    params.requireVisibleReply ? EXPLICIT_GROUP_TRIGGER_SYSTEM_PROMPT : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function buildVisibleReplySilentReplyConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return {
+    ...cfg,
+    surfaces: {
+      ...cfg.surfaces,
+      onebot: {
+        ...cfg.surfaces?.onebot,
+        silentReply: {
+          ...cfg.surfaces?.onebot?.silentReply,
+          group: "disallow",
+        },
+        silentReplyRewrite: {
+          ...cfg.surfaces?.onebot?.silentReplyRewrite,
+          group: true,
+        },
+      },
+    },
+  };
+}
+
+async function isReplyingToSelf(
+  account: ResolvedOneBotAccount,
+  event: OneBotMessageEvent,
+  log?: GatewayContext["log"],
+): Promise<boolean> {
+  const selfId = String(event.self_id);
+
+  for (const messageId of extractReplyMessageIds(event.message)) {
+    try {
+      const result = await getMessage(account, messageId);
+      if (readMessageSenderIdFromApiResponse(result) === selfId) {
+        return true;
+      }
+    } catch (err) {
+      log?.debug?.(`[onebot:${account.accountId}] Failed to inspect replied message ${String(messageId)} for trigger gate: ${String(err)}`);
+    }
+  }
+
+  return false;
+}
+
 export async function withSessionLock<T>(
   locks: Map<string, Promise<void>>,
   sessionKey: string,
@@ -312,6 +378,9 @@ interface BufferedMessage {
   videos: string[];
   recordSegments: OneBotMessageSegment[];
   receivedAt: number;
+  wasMentioned: boolean;
+  groupTriggerReason?: OneBotGroupTriggerReason;
+  requireVisibleReply: boolean;
 }
 
 interface ChatBatch {
@@ -467,6 +536,13 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const combinedFileAttachments = messages.flatMap((m) => m.fileAttachments);
         const combinedVideos = messages.flatMap((m) => m.videos);
         const combinedRecordSegs = messages.flatMap((m) => m.recordSegments);
+        const wasMentioned = messages.some((m) => m.wasMentioned);
+        const requireVisibleReply = isGroup && messages.some((m) => m.requireVisibleReply);
+        const groupTriggerReasons = Array.from(new Set(
+          messages
+            .map((m) => m.groupTriggerReason)
+            .filter((reason): reason is OneBotGroupTriggerReason => Boolean(reason)),
+        ));
 
         if (messages.length > 1) {
           log?.info(
@@ -564,6 +640,12 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           allowFrom: account.allowFrom,
           peerId,
         });
+        const groupSystemPrompt = isGroup
+          ? buildGroupSystemPrompt({
+            configuredPrompt: account.groupSystemPrompt,
+            requireVisibleReply,
+          })
+          : undefined;
 
         // Build media payload for OpenClaw's unified media pipeline.
         const mediaEntries: InboundMediaEntry[] = [
@@ -627,6 +709,10 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           CommandSource: "text",
           OriginatingChannel: "onebot",
           OriginatingTo: toAddress,
+          WasMentioned: isGroup ? wasMentioned : undefined,
+          OneBotGroupTrigger: groupTriggerReasons.length > 0 ? groupTriggerReasons.join(",") : undefined,
+          OneBotRequireVisibleReply: requireVisibleReply || undefined,
+          GroupSystemPrompt: groupSystemPrompt,
           ...mediaPayload,
         });
 
@@ -679,6 +765,16 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             cfg,
             dispatcherOptions: {
               responsePrefix: messagesConfig.responsePrefix,
+              ...(requireVisibleReply
+                ? {
+                  silentReplyContext: {
+                    cfg: buildVisibleReplySilentReplyConfig(cfg),
+                    sessionKey: route.sessionKey,
+                    surface: "onebot",
+                    conversationType: "group" as const,
+                  },
+                }
+                : {}),
               deliver: async (
                 payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
                 info: { kind: string },
@@ -802,9 +898,18 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         // Skip own messages
         if (event.user_id === event.self_id) return;
 
-        if (isGroup && account.groupRequireMention !== false && !isMentioningSelf(event)) {
-          log?.debug?.(`[onebot:${account.accountId}] Ignoring group message without @ mention from group:${event.group_id}`);
-          return;
+        const wasMentioned = isGroup ? isMentioningSelf(event) : false;
+        const hasReply = event.message.some((seg) => seg.type === "reply");
+        let groupTriggerReason: OneBotGroupTriggerReason | undefined;
+        if (isGroup && account.groupRequireMention !== false) {
+          if (wasMentioned) {
+            groupTriggerReason = "mention";
+          } else if (hasReply && await isReplyingToSelf(account, event, log)) {
+            groupTriggerReason = "reply";
+          } else {
+            log?.debug?.(`[onebot:${account.accountId}] Ignoring group message without @/reply trigger from group:${event.group_id}`);
+            return;
+          }
         }
 
         log?.info(
@@ -827,7 +932,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             });
         }
 
-        const hasReply = event.message.some((seg) => seg.type === "reply");
         const hasFile = event.message.some((seg) => seg.type === "file");
         const replyContextsPromise = hasReply
           ? loadRepliedMessageContexts(account, event, log)
@@ -864,6 +968,9 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           videos,
           recordSegments,
           receivedAt,
+          wasMentioned,
+          groupTriggerReason,
+          requireVisibleReply: isGroup && account.groupRequireMention !== false && Boolean(groupTriggerReason),
         };
 
         const existing = chatBatches.get(batchKey);

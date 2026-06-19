@@ -75,7 +75,11 @@
           "groupRequireMention": {
             "type": "boolean",
             "default": true,
-            "description": "Only process inbound group messages that @ mention this bot"
+            "description": "Only process inbound group messages that @ mention this bot or reply to this bot"
+          },
+          "groupSystemPrompt": {
+            "type": "string",
+            "description": "Extra system prompt appended for OneBot group chats after the default group-chat instructions"
           },
           "configWrites": {
             "type": "boolean",
@@ -218,7 +222,11 @@
               "groupRequireMention": {
                 "type": "boolean",
                 "default": true,
-                "description": "Only process inbound group messages that @ mention this bot"
+                "description": "Only process inbound group messages that @ mention this bot or reply to this bot"
+              },
+              "groupSystemPrompt": {
+                "type": "string",
+                "description": "Extra system prompt appended for OneBot group chats after the default group-chat instructions"
               },
               "configWrites": { "type": "boolean" },
               "commands": { "$ref": "#/$defs/commands" },

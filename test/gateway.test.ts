@@ -512,6 +512,149 @@ describe('gateway', () => {
     await wsServer.close();
   });
 
+  it('passes configured group system prompt into group context', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+    const groupSystemPrompt = 'Treat a bare Spotify URL from a mentioned group message as a download request.';
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        groupSystemPrompt,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: () => {}, error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 119,
+      user_id: 230,
+      group_id: 999005,
+      message: [
+        { type: 'at', data: { qq: '999' } },
+        { type: 'text', data: { text: ' https://open.spotify.com/track/abc123' } },
+      ],
+      raw_message: '[CQ:at,qq=999] https://open.spotify.com/track/abc123',
+      sender: { user_id: 230, nickname: 'SpotifyUser', role: 'member' },
+      self_id: 999,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastDispatchArgs).not.toBeNull();
+    }, WAIT_FOR_BATCH);
+
+    const prompt = runtimeState.state.lastDispatchArgs.ctx.GroupSystemPrompt;
+    expect(prompt).toContain(groupSystemPrompt);
+    expect(prompt).toContain('Do not output NO_REPLY.');
+    expect(runtimeState.state.lastDispatchArgs.ctx.WasMentioned).toBe(true);
+    expect(runtimeState.state.lastDispatchArgs.ctx.OneBotGroupTrigger).toBe('mention');
+    expect(runtimeState.state.lastDispatchArgs.ctx.OneBotRequireVisibleReply).toBe(true);
+    expect(runtimeState.state.lastDispatchArgs.dispatcherOptions.silentReplyContext).toMatchObject({
+      sessionKey: 'session:test',
+      surface: 'onebot',
+      conversationType: 'group',
+    });
+    expect(runtimeState.state.lastDispatchArgs.dispatcherOptions.silentReplyContext.cfg.surfaces.onebot.silentReply.group).toBe('disallow');
+    expect(runtimeState.state.lastDispatchArgs.dispatcherOptions.silentReplyContext.cfg.surfaces.onebot.silentReplyRewrite.group).toBe(true);
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+  });
+
+  it('accepts reply-to-bot group messages and forces a visible reply policy', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+
+    getMessageMock.mockResolvedValue({
+      status: 'ok',
+      retcode: 0,
+      data: {
+        self_id: 999,
+        user_id: 999,
+        message_id: 222001,
+        message_type: 'group',
+        group_id: 999006,
+        sender: { user_id: 999, nickname: 'Bot' },
+        message: [{ type: 'text', data: { text: 'previous bot reply' } }],
+      },
+    });
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: () => {}, error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    wsServer.sendToAll({
+      post_type: 'message',
+      message_type: 'group',
+      sub_type: 'normal',
+      message_id: 1191,
+      user_id: 230,
+      group_id: 999006,
+      message: [
+        { type: 'reply', data: { id: 222001 } },
+        { type: 'text', data: { text: '继续说' } },
+      ],
+      raw_message: '[CQ:reply,id=222001]继续说',
+      sender: { user_id: 230, nickname: 'ReplyUser', role: 'member' },
+      self_id: 999,
+      time: Math.floor(Date.now() / 1000),
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeState.state.lastDispatchArgs).not.toBeNull();
+    }, WAIT_FOR_BATCH);
+
+    expect(getMessageMock).toHaveBeenCalledWith(expect.anything(), 222001);
+    expect(runtimeState.state.lastDispatchArgs.ctx.WasMentioned).toBe(false);
+    expect(runtimeState.state.lastDispatchArgs.ctx.OneBotGroupTrigger).toBe('reply');
+    expect(runtimeState.state.lastDispatchArgs.ctx.OneBotRequireVisibleReply).toBe(true);
+    expect(runtimeState.state.lastDispatchArgs.ctx.GroupSystemPrompt).toContain('Do not output NO_REPLY.');
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[replied message 222001 from Bot]: previous bot reply');
+    expect(runtimeState.state.lastDispatchArgs.dispatcherOptions.silentReplyContext.cfg.surfaces.onebot.silentReply.group).toBe('disallow');
+    expect(runtimeState.state.lastDispatchArgs.dispatcherOptions.silentReplyContext.cfg.surfaces.onebot.silentReplyRewrite.group).toBe(true);
+
+    ac.abort();
+    await runP;
+    await wsServer.close();
+  });
+
   it('passes NapCat group image mentions as inbound media', async () => {
     const wsServer = await startMockOneBotWsServer();
     const ac = new AbortController();

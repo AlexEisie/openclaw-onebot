@@ -34,7 +34,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🔄 WebSocket 自动重连（指数退避）
 - 🔒 可选 access token 鉴权
 - 🎯 `allowFrom` 消息来源过滤（私聊/群聊/用户级别）
-- 📣 群聊默认仅响应 @ 机器人的消息，可用 `groupRequireMention` 关闭
+- 📣 群聊默认仅响应 @ 机器人或回复机器人消息；显式触发后会强制发送可见回复，可用 `groupRequireMention` 关闭门禁
 - 🏷️ 保留非机器人 @ 提及，上下文会以 `[mentioned user ...]` 传给 OpenClaw
 - 🪵 Gateway 日志会打印最终发给 OpenClaw 的源文本，便于排查图片、@、回复等消息段
 - 🧩 OneBot v11 通用消息段、消息撤回/查询、群信息与基础群管理 action
@@ -116,7 +116,7 @@ openclaw plugins install .clawhub-plugin/openclaw-onebot-plugin --force
 说明：
 - 插件配置键使用 `openclaw-onebot`
 - 通道配置键使用 `channels.onebot`
-- 群聊默认只响应 @ 机器人的消息；如需接收所有群消息，可设置 `groupRequireMention: false`
+- 群聊默认只响应 @ 机器人或回复机器人消息；显式触发后会忽略静默策略并发送可见回复。如需接收所有群消息，可设置 `groupRequireMention: false`
 - 强烈建议配置 `allowFrom` 为可信 QQ 私聊或群聊；不配置时普通消息仍可进入通道，但 `/status`、`/model` 等 OpenClaw 文本命令不会被授权
 - `accessToken` 应使用强随机值，并只把 OneBot HTTP/WebSocket 端点暴露给本机或可信网络
 - `sharedDir` 建议使用专用目录，不要与下载、桌面、文档等私人文件目录混用
@@ -173,7 +173,7 @@ services:
 }
 ```
 
-入站图片和文件不依赖这个共享目录：插件会从 OneBot/NapCat 给出的 URL 下载到 OpenClaw 本地 media 目录（图片默认 `/home/node/.openclaw/media/onebot/inbound`，文件默认 `/home/node/.openclaw/media/onebot/inbound-files`），再把本地路径传给 OpenClaw agent。OpenClaw 容器需要能访问 NapCat/QQ 文件下载 URL，并且 `/home/node/.openclaw` 必须可写。群聊默认仍只处理 @ 机器人的消息；如果用户单独发文件，机器人会忽略，除非设置 `groupRequireMention: false`，或用户再回复该文件并 @ 机器人。
+入站图片和文件不依赖这个共享目录：插件会从 OneBot/NapCat 给出的 URL 下载到 OpenClaw 本地 media 目录（图片默认 `/home/node/.openclaw/media/onebot/inbound`，文件默认 `/home/node/.openclaw/media/onebot/inbound-files`），再把本地路径传给 OpenClaw agent。OpenClaw 容器需要能访问 NapCat/QQ 文件下载 URL，并且 `/home/node/.openclaw` 必须可写。群聊默认仍只处理 @ 机器人或回复机器人消息；如果用户单独发文件，机器人会忽略，除非设置 `groupRequireMention: false`，或用户再回复该文件/消息并触发机器人。
 
 #### 3. 重启 Gateway
 
@@ -210,7 +210,7 @@ openclaw gateway restart
 | `containerSharedDir` | NapCat 运行环境可见的对应共享目录；默认 `/shared`；OpenClaw 与 NapCat 分容器时必须映射到同一个宿主机目录 |
 | `groupAutoReact` | 是否对入站群消息自动添加 reaction，默认 `false` |
 | `groupAutoReactEmojiId` | 群聊自动 reaction 使用的 QQ emoji id，默认 `1` |
-| `groupRequireMention` | 群聊是否只处理 @ 机器人的消息，默认 `true` |
+| `groupRequireMention` | 群聊是否只处理 @ 机器人或回复机器人消息，默认 `true`；显式触发后会强制可见回复 |
 
 ### Reaction 与流式回复
 
@@ -376,7 +376,7 @@ Note:
 - 🔄 WebSocket auto-reconnect with exponential backoff
 - 🔒 Optional access token authentication
 - 🎯 `allowFrom` filtering (private/group/user-level)
-- 📣 Group chats only respond to @ mentions by default; set `groupRequireMention` to `false` to receive all group messages
+- 📣 Group chats only respond to @ mentions or replies to the bot by default; explicit triggers force a visible reply. Set `groupRequireMention` to `false` to disable the gate
 - 🏷️ Non-bot @ mentions are preserved as `[mentioned user ...]` context for OpenClaw
 - 🪵 Gateway logs the final source text sent to OpenClaw for debugging image, @ mention, and reply segments
 - 🧩 OneBot v11 message segments, mixed reply/@/image sends, delete/query APIs, group info, and basic group-management actions
@@ -439,7 +439,7 @@ Add to `openclaw.json`:
 Notes:
 - Use `openclaw-onebot` for plugin config keys
 - Keep runtime channel config under `channels.onebot`
-- Group chats only respond to @ mentions by default; set `groupRequireMention: false` to receive every group message
+- Group chats only respond to @ mentions or replies to the bot by default; explicit triggers ignore silent-reply policy and send a visible reply. Set `groupRequireMention: false` to receive every group message
 - Configure `allowFrom` to trusted QQ private users or groups. Without it, normal messages can still be routed, but OpenClaw text commands such as `/status` and `/model` are not authorized
 - Use a strong `accessToken` and keep OneBot HTTP/WebSocket endpoints on localhost or a trusted network
 - Use a dedicated `sharedDir`; do not point it at unrelated private files
@@ -496,7 +496,7 @@ Matching `openclaw.json`:
 }
 ```
 
-Inbound images and files do not use this shared directory. The plugin downloads OneBot/NapCat URLs into OpenClaw's local media directories, defaulting to `/home/node/.openclaw/media/onebot/inbound` for images and `/home/node/.openclaw/media/onebot/inbound-files` for files, then passes local paths to the OpenClaw agent. The OpenClaw container must have network access to NapCat/QQ download URLs, and `/home/node/.openclaw` must be writable. Group chats still require an @ mention by default; a file sent by itself is ignored unless `groupRequireMention: false` is set, or the user replies to that file and @ mentions the bot.
+Inbound images and files do not use this shared directory. The plugin downloads OneBot/NapCat URLs into OpenClaw's local media directories, defaulting to `/home/node/.openclaw/media/onebot/inbound` for images and `/home/node/.openclaw/media/onebot/inbound-files` for files, then passes local paths to the OpenClaw agent. The OpenClaw container must have network access to NapCat/QQ download URLs, and `/home/node/.openclaw` must be writable. Group chats still require an @ mention or reply-to-bot trigger by default; a file sent by itself is ignored unless `groupRequireMention: false` is set, or the user replies to that file/message and triggers the bot.
 
 #### 3. Restart Gateway
 
@@ -594,7 +594,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 | `containerSharedDir` | Matching shared directory visible to the NapCat runtime; defaults to `/shared` and must map to the same host directory when OpenClaw and NapCat are separate containers |
 | `groupAutoReact` | Whether to auto-react to inbound group messages; defaults to `false` |
 | `groupAutoReactEmojiId` | QQ emoji id used for automatic group reactions; defaults to `1` |
-| `groupRequireMention` | Whether group chats only process messages that @ mention this bot; defaults to `true` |
+| `groupRequireMention` | Whether group chats only process messages that @ mention this bot or reply to this bot; defaults to `true`; explicit triggers force a visible reply |
 
 ### Target Format
 
