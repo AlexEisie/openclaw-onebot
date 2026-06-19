@@ -280,14 +280,16 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
         messageId: result.messageId,
       };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, cfg, forceDocument }) => {
       const account = resolveOneBotAccount(cfg, accountId);
       const target = parseTarget(to);
       const mediaPath = resolveLocalMediaPath(mediaUrl ?? "");
       const ext = extname(mediaPath).toLowerCase();
 
       let mediaResult;
-      if (AUDIO_EXTS.has(ext)) {
+      if (forceDocument) {
+        mediaResult = await uploadFile(account, target.type, target.id, mediaPath, basename(mediaPath));
+      } else if (AUDIO_EXTS.has(ext)) {
         mediaResult = await sendRecord(account, target.type, target.id, mediaPath);
       } else if (IMAGE_EXTS.has(ext)) {
         mediaResult = await sendImage(account, target.type, target.id, mediaPath);

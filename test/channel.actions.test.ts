@@ -482,6 +482,41 @@ describe('channel actions', () => {
     expect(result).toMatchObject({ channel: 'onebot', messageId: '101' });
   });
 
+  it('routes forced-document audio media through uploadFile', async () => {
+    uploadFile.mockResolvedValueOnce({
+      status: 'ok',
+      retcode: 0,
+      data: {},
+    });
+
+    const result = await onebotPlugin.outbound!.sendMedia!({
+      to: 'group:77',
+      text: '',
+      mediaUrl: '/tmp/openclaw-spotify/Artist - Title.mp3',
+      accountId: 'default',
+      forceDocument: true,
+      cfg: {
+        channels: {
+          onebot: {
+            wsUrl: 'ws://127.0.0.1:3000',
+            httpUrl: 'http://127.0.0.1:3001',
+          },
+        },
+      },
+    } as any);
+
+    expect(uploadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      'group',
+      77,
+      '/tmp/openclaw-spotify/Artist - Title.mp3',
+      'Artist - Title.mp3',
+    );
+    expect(sendRecord).not.toHaveBeenCalled();
+    expect(result.channel).toBe('onebot');
+    expect(typeof result.messageId).toBe('string');
+  });
+
   it('routes outbound video media through generic OneBot send_msg', async () => {
     sendMessageSegments.mockResolvedValueOnce({
       status: 'ok',
