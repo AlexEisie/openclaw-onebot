@@ -269,8 +269,18 @@ describe('e2e', () => {
         summary: 'photo',
       },
     ]);
+    expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrl).toBe('https://img.example/replied.png');
+    expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrls).toBeUndefined();
+    expect(runtimeState.state.lastDispatchArgs.ctx.mediaUrl).toBe('https://img.example/replied.png');
+    expect(runtimeState.state.lastDispatchArgs.ctx.mediaUrls).toBeUndefined();
+    expect(runtimeState.state.lastDispatchArgs.ctx.MediaPath).toBeUndefined();
+    expect(runtimeState.state.lastDispatchArgs.ctx.mediaPath).toBeUndefined();
+    expect(runtimeState.state.lastDispatchArgs.ctx.mediaType).toBe('image/png');
+    expect(runtimeState.state.lastDispatchArgs.ctx.mediaTypes).toEqual(['image/png']);
     expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[replied message 9001 from OriginalUser]: original message without bot mention');
     expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('can you see it?');
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[Image attached photo]');
+    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).not.toContain('https://img.example/replied.png');
     expect(runtimeState.state.lastEnvelopeArgs.body).toContain('[Image: https://img.example/replied.png photo]');
 
     ac.abort();

@@ -29,7 +29,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🧭 **OpenClaw 文本命令支持** — 已授权来源可使用 `/status`、`/help`、`/commands`、`/model`、`/new`、`/reset` 等命令
 - 🎤 **语音完整链路** — QQ 语音 (SILK/AMR) → MP3 → STT → TTS → 发送 QQ 语音
 - 📦 **消息聚合** — 连续多条消息 300ms 内自动合并，避免单条消息长时间等待
-- 🖼️ 入站图片作为 OpenClaw media (`MediaUrl` / `MediaUrls`) 传递，出站支持图片、语音、文件附件发送
+- 🖼️ 入站图片和文件会下载到 OpenClaw 本地 media 后作为 media 传递，出站支持图片、语音、视频和文件附件发送
 - 🛠️ 通用 `sendMedia` 出站适配，delivery recovery / mirror / message tool 等通路都能发送图片、语音、文件
 - 🔄 WebSocket 自动重连（指数退避）
 - 🔒 可选 access token 鉴权
@@ -39,7 +39,7 @@ OpenClaw 的 **OneBot 11 协议通道插件**，让 QQ 成为 OpenClaw 一等消
 - 🪵 Gateway 日志会打印最终发给 OpenClaw 的源文本，便于排查图片、@、回复等消息段
 - 🧩 OneBot v11 通用消息段、消息撤回/查询、群信息与基础群管理 action
 - 🛡️ 未配置 `allowFrom` 时 QQ 文本命令不会被授权；需要显式白名单或 `["*"]`
-- ✅ 139 个测试用例全部通过
+- ✅ 142 个测试用例全部通过
 - 📈 覆盖率可通过 `npm run coverage` 复核
 
 ### 架构
@@ -135,6 +135,46 @@ OneBot `setup` 也支持：
 - 或 `openclaw channels add --channel onebot --shared-dir <hostPath> --container-shared-dir /shared`
 - 如果 OpenClaw 升级后覆盖了 CLI dist，且当前 OpenClaw 仍不支持 shared-dir 参数，可在插件目录审查后执行 `npm run sync:openclaw-cli` 重新同步参数接线
 
+
+#### OpenClaw / NapCat 容器部署要求
+
+如果 OpenClaw 和 NapCat 跑在不同 Docker 容器里，除安装插件外，还必须让两个容器看到同一个共享目录。插件会把出站图片、语音、视频和普通文件先 stage 到 OpenClaw 可写目录，再通过 `file:///...` 让 NapCat 读取；如果只在 NapCat 容器里挂载目录，NapCat 就读不到 OpenClaw 容器里的文件路径。
+
+1. 在宿主机创建专用目录，例如 `/opt/NapCat/shared`。
+2. 给 OpenClaw 和 NapCat 都挂载同一个宿主机目录，建议两个容器内都使用 `/shared`。
+3. 在 `channels.onebot` 中设置 `sharedDir` 为 OpenClaw 容器内路径，设置 `containerSharedDir` 为 NapCat 容器内路径。两个容器都挂载到 `/shared` 时，这两个值都填 `/shared`。
+4. 确保 OpenClaw 运行用户能写入共享目录，NapCat 能读取，例如 `chown 1000:1000 /opt/NapCat/shared && chmod 755 /opt/NapCat/shared`。
+
+1Panel/OpenClaw 的典型 compose 片段：
+
+```yaml
+services:
+  openclaw:
+    volumes:
+      - ./data/conf:/home/node/.openclaw
+      - ./data/workspace:/home/node/.openclaw/workspace
+      - /opt/NapCat/shared:/shared
+
+  napcat:
+    volumes:
+      - /opt/NapCat/shared:/shared
+```
+
+对应 `openclaw.json`：
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "sharedDir": "/shared",
+      "containerSharedDir": "/shared"
+    }
+  }
+}
+```
+
+入站图片和文件不依赖这个共享目录：插件会从 OneBot/NapCat 给出的 URL 下载到 OpenClaw 本地 media 目录（图片默认 `/home/node/.openclaw/media/onebot/inbound`，文件默认 `/home/node/.openclaw/media/onebot/inbound-files`），再把本地路径传给 OpenClaw agent。OpenClaw 容器需要能访问 NapCat/QQ 文件下载 URL，并且 `/home/node/.openclaw` 必须可写。群聊默认仍只处理 @ 机器人的消息；如果用户单独发文件，机器人会忽略，除非设置 `groupRequireMention: false`，或用户再回复该文件并 @ 机器人。
+
 #### 3. 重启 Gateway
 
 ```bash
@@ -166,8 +206,8 @@ openclaw gateway restart
 |------|------|
 | `allowFrom` | 消息来源白名单 — `private:<QQ号>`、`group:<群号>`、或 `*`（允许所有） |
 | `accessToken` | HTTP API 用 Bearer token，WebSocket 用 query 参数 |
-| `sharedDir` | 宿主机共享目录；默认 `~/napcat/shared`，用于把语音/图片 stage 给 NapCat |
-| `containerSharedDir` | 容器内共享目录；默认 `/shared`，与 `sharedDir` 对应 |
+| `sharedDir` | 插件/OpenClaw 运行环境可见的共享目录；默认 `~/napcat/shared`，用于把出站语音/图片/视频/文件 stage 给 NapCat |
+| `containerSharedDir` | NapCat 运行环境可见的对应共享目录；默认 `/shared`；OpenClaw 与 NapCat 分容器时必须映射到同一个宿主机目录 |
 | `groupAutoReact` | 是否对入站群消息自动添加 reaction，默认 `false` |
 | `groupAutoReactEmojiId` | 群聊自动 reaction 使用的 QQ emoji id，默认 `1` |
 | `groupRequireMention` | 群聊是否只处理 @ 机器人的消息，默认 `true` |
@@ -216,10 +256,11 @@ openclaw gateway restart
 
 旧版 `channels.onebot.blockStreamingCoalesce` 仍兼容；新版 `openclaw doctor --fix` 会把它迁移到 `channels.onebot.streaming.block.coalesce`。
 
-### 入站图片与 @
+### 入站图片、文件与 @
 
-- OneBot `image` 段会传入 OpenClaw media 字段：首张图为 `MediaUrl`，多张图为 `MediaUrls`
-- 只有图片或 `@bot + 图片` 的消息会在 agent 文本中包含 `[Image: <url>]`
+- OneBot `image` 段会先下载到 OpenClaw 本地 media 目录，再传入 OpenClaw media 字段：首个附件为 `MediaUrl` / `MediaPath`，多个附件会填充 `MediaUrls` / `MediaPaths`
+- OneBot `file` 段会优先使用段内 URL，也会按需调用 `get_file`、`get_group_file_url` 或 `get_private_file_url`；引用消息里的文件同样会通过 `get_msg` 后加载
+- Agent 文本中图片使用 `[Image attached]` 占位，不直接暴露 QQ 临时下载链接；文件会包含文件名、大小和本地路径
 - 群聊中 @ 其他人不会被丢弃，例如 `@bot @B 这个人在干什么` 会传为 `[mentioned user ... B] 这个人在干什么`
 - Gateway 会打印 `[onebot:<account>] OpenClaw source text:`，后面就是实际送入 OpenClaw 的最终源文本
 
@@ -263,7 +304,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ### NapCat 部署参考
 
-推荐使用 Docker 部署 [NapCat](https://github.com/NapNeko/NapCatQQ)：
+推荐使用 Docker 部署 [NapCat](https://github.com/NapNeko/NapCatQQ)。如果 OpenClaw 也在 Docker 里，必须同时在 OpenClaw compose 中挂载同一个共享目录；完整要求见上面的“OpenClaw / NapCat 容器部署要求”。
 
 ```yaml
 # docker-compose.yml
@@ -283,7 +324,7 @@ services:
 
 ```bash
 npm install
-npm test          # 139 tests
+npm test          # 142 tests
 npm run build     # 编译 TypeScript
 npm run coverage  # 覆盖率报告
 npm run sync:openclaw-cli  # 审查后重新同步 OpenClaw CLI 的 shared-dir 参数
@@ -330,7 +371,7 @@ Note:
 - 🌊 **Block streaming** — OpenClaw partial replies arrive as multiple QQ messages
 - 🎤 **Full voice pipeline** — QQ voice (SILK/AMR) → MP3 → STT → TTS → send QQ voice
 - 📦 **Message batching** — auto-merge rapid messages within 300ms without holding single messages long
-- 🖼️ Inbound images are passed as OpenClaw media (`MediaUrl` / `MediaUrls`); outbound image, audio, and file attachments are supported
+- 🖼️ Inbound images and files are downloaded into OpenClaw local media and passed as media; outbound image, audio, video, and file attachments are supported
 - 🛠️ Generic `sendMedia` outbound adapter so delivery recovery, mirror, and message-tool paths can all send images, audio, and files
 - 🔄 WebSocket auto-reconnect with exponential backoff
 - 🔒 Optional access token authentication
@@ -341,7 +382,7 @@ Note:
 - 🧩 OneBot v11 message segments, mixed reply/@/image sends, delete/query APIs, group info, and basic group-management actions
 - 🧭 OpenClaw text-command support for authorized senders (`/status`, `/help`, `/commands`, `/model`, `/new`, `/reset`, etc.)
 - 🛡️ OpenClaw text commands are not authorized until `allowFrom` is explicitly configured
-- ✅ 139 tests passing
+- ✅ 142 tests passing
 - 📈 Coverage can be re-generated with `npm run coverage`
 
 ### Quick Start
@@ -417,6 +458,46 @@ OneBot setup also supports:
 - or `openclaw channels add --channel onebot --shared-dir <hostPath> --container-shared-dir /shared`
 - if an OpenClaw upgrade overwrites the installed CLI dist and your current OpenClaw build still lacks shared-dir flags, review then run `npm run sync:openclaw-cli` from the plugin directory
 
+
+#### OpenClaw / NapCat Container Requirements
+
+When OpenClaw and NapCat run in separate Docker containers, installing the plugin is not enough. Both containers must see the same shared directory. The plugin stages outbound images, voice, videos, and regular files into a directory writable by OpenClaw, then sends NapCat a `file:///...` path. If only the NapCat container has that mount, NapCat cannot read paths that exist only inside the OpenClaw container.
+
+1. Create a dedicated host directory, for example `/opt/NapCat/shared`.
+2. Mount that same host directory into both OpenClaw and NapCat. Using `/shared` in both containers is recommended.
+3. Set `channels.onebot.sharedDir` to the path visible inside the OpenClaw container, and `channels.onebot.containerSharedDir` to the corresponding path visible inside the NapCat container. If both containers mount it as `/shared`, set both values to `/shared`.
+4. Make sure the OpenClaw runtime user can write to the shared directory and NapCat can read it, for example `chown 1000:1000 /opt/NapCat/shared && chmod 755 /opt/NapCat/shared`.
+
+Typical 1Panel/OpenClaw compose fragment:
+
+```yaml
+services:
+  openclaw:
+    volumes:
+      - ./data/conf:/home/node/.openclaw
+      - ./data/workspace:/home/node/.openclaw/workspace
+      - /opt/NapCat/shared:/shared
+
+  napcat:
+    volumes:
+      - /opt/NapCat/shared:/shared
+```
+
+Matching `openclaw.json`:
+
+```json
+{
+  "channels": {
+    "onebot": {
+      "sharedDir": "/shared",
+      "containerSharedDir": "/shared"
+    }
+  }
+}
+```
+
+Inbound images and files do not use this shared directory. The plugin downloads OneBot/NapCat URLs into OpenClaw's local media directories, defaulting to `/home/node/.openclaw/media/onebot/inbound` for images and `/home/node/.openclaw/media/onebot/inbound-files` for files, then passes local paths to the OpenClaw agent. The OpenClaw container must have network access to NapCat/QQ download URLs, and `/home/node/.openclaw` must be writable. Group chats still require an @ mention by default; a file sent by itself is ignored unless `groupRequireMention: false` is set, or the user replies to that file and @ mentions the bot.
+
 #### 3. Restart Gateway
 
 ```bash
@@ -476,10 +557,11 @@ End-to-end voice flow:
 
 Legacy `channels.onebot.blockStreamingCoalesce` remains accepted; current `openclaw doctor --fix` migrates it to `channels.onebot.streaming.block.coalesce`.
 
-### Inbound Images and Mentions
+### Inbound Images, Files, and Mentions
 
-- OneBot `image` segments are forwarded to OpenClaw media fields: the first image is `MediaUrl`, and multiple images are `MediaUrls`
-- Image-only or `@bot + image` messages include `[Image: <url>]` in the agent-facing text
+- OneBot `image` segments are downloaded into OpenClaw local media before being forwarded through OpenClaw media fields: the first attachment becomes `MediaUrl` / `MediaPath`, and multiple attachments populate `MediaUrls` / `MediaPaths`
+- OneBot `file` segments use the segment URL when available and can also call `get_file`, `get_group_file_url`, or `get_private_file_url`; files in replied messages are loaded through `get_msg` first
+- Agent-facing image text uses `[Image attached]` instead of exposing QQ temporary download URLs; files include the filename, size, and local path
 - Group mentions of other users are preserved, so `@bot @B what is this person doing` reaches OpenClaw as `[mentioned user ... B] what is this person doing`
 - Gateway logs `[onebot:<account>] OpenClaw source text:` followed by the exact final source text sent to OpenClaw
 
@@ -508,8 +590,8 @@ npm run react-test -- --message-id <message_id> --emoji 76
 |--------|-------------|
 | `allowFrom` | Whitelist — `private:<qq>`, `group:<id>`, or `*` (allow all) |
 | `accessToken` | Bearer token for HTTP, query param for WebSocket |
-| `sharedDir` | Host-side shared directory; defaults to `~/napcat/shared` for staging outbound media |
-| `containerSharedDir` | Container-side mount path; defaults to `/shared` and should map to `sharedDir` |
+| `sharedDir` | Shared directory visible to the plugin/OpenClaw runtime; defaults to `~/napcat/shared` for staging outbound media |
+| `containerSharedDir` | Matching shared directory visible to the NapCat runtime; defaults to `/shared` and must map to the same host directory when OpenClaw and NapCat are separate containers |
 | `groupAutoReact` | Whether to auto-react to inbound group messages; defaults to `false` |
 | `groupAutoReactEmojiId` | QQ emoji id used for automatic group reactions; defaults to `1` |
 | `groupRequireMention` | Whether group chats only process messages that @ mention this bot; defaults to `true` |
@@ -524,7 +606,7 @@ npm run react-test -- --message-id <message_id> --emoji 76
 
 ```bash
 npm install
-npm test          # Run 139 tests
+npm test          # Run 142 tests
 npm run build     # Compile TypeScript
 npm run coverage  # Coverage report
 npm run sync:openclaw-cli  # Re-apply shared-dir CLI wiring after review

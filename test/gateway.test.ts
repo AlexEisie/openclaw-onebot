@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startMockOneBotWsServer } from './helpers/mock-ws-server.js';
@@ -7,6 +7,9 @@ import { createMockRuntime } from './helpers/mock-runtime.js';
 
 // Mock runtime module used by gateway.ts
 let runtimeState: any;
+const { getMessageMock } = vi.hoisted(() => ({
+  getMessageMock: vi.fn(async () => ({ status: 'ok', retcode: 0, data: {} })),
+}));
 vi.mock('../src/runtime.js', () => {
   return {
     getOneBotRuntime: () => runtimeState.runtime,
@@ -36,7 +39,7 @@ const outboundMockState: {
 };
 vi.mock('../src/outbound.js', () => {
   return {
-    getMessage: async () => ({ status: 'ok', retcode: 0, data: {} }),
+    getMessage: getMessageMock,
     getFile: async (account: any, fileRef: any) => {
       outboundCalls.push({ kind: 'getFile', args: [account, fileRef] });
       return outboundMockState.getFileResult ?? { status: 'ok', retcode: 0, data: {} };
@@ -90,8 +93,15 @@ vi.mock('../src/outbound.js', () => {
 const WAIT_FOR_BATCH = { timeout: 5000 };
 
 describe('gateway', () => {
-  beforeEach(() => {
+  const oldInboundImageDir = process.env.OPENCLAW_ONEBOT_INBOUND_MEDIA_DIR;
+  let inboundImageDir: string;
+
+  beforeEach(async () => {
+    inboundImageDir = await mkdtemp(join(tmpdir(), 'onebot-inbound-images-'));
+    process.env.OPENCLAW_ONEBOT_INBOUND_MEDIA_DIR = inboundImageDir;
     outboundCalls.length = 0;
+    getMessageMock.mockReset();
+    getMessageMock.mockResolvedValue({ status: 'ok', retcode: 0, data: {} });
     outboundMockState.sendTextError = null;
     outboundMockState.sendImageError = null;
     outboundMockState.sendRecordError = null;
@@ -105,7 +115,13 @@ describe('gateway', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (oldInboundImageDir === undefined) {
+      delete process.env.OPENCLAW_ONEBOT_INBOUND_MEDIA_DIR;
+    } else {
+      process.env.OPENCLAW_ONEBOT_INBOUND_MEDIA_DIR = oldInboundImageDir;
+    }
+    await rm(inboundImageDir, { recursive: true, force: true });
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -501,6 +517,19 @@ describe('gateway', () => {
     const ac = new AbortController();
     const { startGateway } = await import('../src/gateway.js');
     const infoLogs: string[] = [];
+    const imageBytes = Buffer.from('mock-png-image');
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({
+        'content-type': 'image/png',
+        'content-length': String(imageBytes.length),
+      }),
+      arrayBuffer: async () => imageBytes.buffer.slice(
+        imageBytes.byteOffset,
+        imageBytes.byteOffset + imageBytes.byteLength,
+      ),
+    })) as any;
 
     let readyResolve!: () => void;
     const readyP = new Promise<void>((r) => (readyResolve = r));
@@ -523,50 +552,69 @@ describe('gateway', () => {
 
     await readyP;
 
-    const imageUrl = 'https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=def';
-    wsServer.sendToAll({
-      post_type: 'message',
-      message_type: 'group',
-      sub_type: 'normal',
-      message_id: 119,
-      user_id: 1987460907,
-      group_id: 1084249155,
-      message: [
-        { type: 'at', data: { qq: '3569793910' } },
-        { type: 'text', data: { text: ' ' } },
-        {
-          type: 'image',
-          data: {
-            summary: '',
-            file: 'DFE7ACA8434C280F096C7E50CC153883.png',
-            sub_type: 0,
-            url: imageUrl,
-            file_size: '436658',
+    try {
+      const imageUrl = 'https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=def';
+      wsServer.sendToAll({
+        post_type: 'message',
+        message_type: 'group',
+        sub_type: 'normal',
+        message_id: 119,
+        user_id: 1987460907,
+        group_id: 1084249155,
+        message: [
+          { type: 'at', data: { qq: '3569793910' } },
+          { type: 'text', data: { text: ' ' } },
+          {
+            type: 'image',
+            data: {
+              summary: '',
+              file: 'DFE7ACA8434C280F096C7E50CC153883.png',
+              sub_type: 0,
+              url: imageUrl,
+              file_size: '436658',
+            },
           },
-        },
-      ],
-      raw_message: `[CQ:at,qq=3569793910] [CQ:image,file=DFE7ACA8434C280F096C7E50CC153883.png,url=${imageUrl}]`,
-      sender: { user_id: 1987460907, nickname: 'Alex Eisie', role: 'owner' },
-      self_id: 3569793910,
-      time: Math.floor(Date.now() / 1000),
-    });
+        ],
+        raw_message: `[CQ:at,qq=3569793910] [CQ:image,file=DFE7ACA8434C280F096C7E50CC153883.png,url=${imageUrl}]`,
+        sender: { user_id: 1987460907, nickname: 'Alex Eisie', role: 'owner' },
+        self_id: 3569793910,
+        time: Math.floor(Date.now() / 1000),
+      });
 
-    await vi.waitFor(() => {
-      expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
-    }, WAIT_FOR_BATCH);
+      await vi.waitFor(() => {
+        expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
+      }, WAIT_FOR_BATCH);
 
-    expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe(imageUrl);
-    expect(runtimeState.state.lastFinalizeArgs.MediaUrls).toEqual([imageUrl]);
-    expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('image/png');
-    expect(runtimeState.state.lastFinalizeArgs.MediaTypes).toEqual(['image/png']);
-    expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
-    expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrls).toEqual([imageUrl]);
-    expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(`[Image: ${imageUrl}]`);
-    expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(`[Image: ${imageUrl}]`))).toBe(true);
-
-    ac.abort();
-    await runP;
-    await wsServer.close();
+      const mediaPath = runtimeState.state.lastFinalizeArgs.MediaPath;
+      expect((globalThis.fetch as any).mock.calls[0]?.[0]).toBe(imageUrl);
+      expect(mediaPath).toMatch(/DFE7ACA8434C280F096C7E50CC153883\.png$/);
+      expect(await readFile(mediaPath)).toEqual(imageBytes);
+      expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe(mediaPath);
+      expect(runtimeState.state.lastFinalizeArgs.MediaUrls).toBeUndefined();
+      expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('image/png');
+      expect(runtimeState.state.lastFinalizeArgs.MediaTypes).toEqual(['image/png']);
+      expect(runtimeState.state.lastFinalizeArgs.mediaUrl).toBe(mediaPath);
+      expect(runtimeState.state.lastFinalizeArgs.mediaUrls).toBeUndefined();
+      expect(runtimeState.state.lastFinalizeArgs.mediaPath).toBe(mediaPath);
+      expect(runtimeState.state.lastFinalizeArgs.mediaPaths).toBeUndefined();
+      expect(runtimeState.state.lastFinalizeArgs.mediaType).toBe('image/png');
+      expect(runtimeState.state.lastFinalizeArgs.mediaTypes).toEqual(['image/png']);
+      expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).toContain('[Image attached]');
+      expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).not.toContain(imageUrl);
+      expect(runtimeState.state.lastDispatchArgs.ctx.MediaPath).toBe(mediaPath);
+      expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrl).toBe(mediaPath);
+      expect(runtimeState.state.lastDispatchArgs.ctx.MediaUrls).toBeUndefined();
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[Image attached]');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).not.toContain(imageUrl);
+      expect(runtimeState.state.lastEnvelopeArgs.body).toContain(`[Image: ${imageUrl}]`);
+      expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes('[Image attached]'))).toBe(true);
+      expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(imageUrl))).toBe(false);
+    } finally {
+      ac.abort();
+      await runP;
+      await wsServer.close();
+      globalThis.fetch = oldFetch;
+    }
   });
 
   it('loads NapCat file messages as inbound media and text content', async () => {
@@ -646,13 +694,132 @@ describe('gateway', () => {
 
       expect(outboundCalls.some((call) => call.kind === 'getFile')).toBe(true);
       expect(outboundCalls.some((call) => call.kind === 'getPrivateFileUrl')).toBe(true);
-      expect(globalThis.fetch).toHaveBeenCalledWith(fileUrl);
+      expect(globalThis.fetch).toHaveBeenCalledWith(fileUrl, expect.any(Object));
       expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe(fileUrl);
       expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('text/plain');
       expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).not.toContain('[File: 修改.txt]\n[File: 修改.txt 91 bytes]');
-      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File: 修改.txt 91 bytes]');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File: 修改.txt');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File local path:');
       expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(fileText);
       expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes(fileText))).toBe(true);
+    } finally {
+      ac.abort();
+      await runP;
+      await wsServer.close();
+      globalThis.fetch = oldFetch;
+    }
+  });
+
+  it('loads file attachments from replied NapCat messages', async () => {
+    const wsServer = await startMockOneBotWsServer();
+    const ac = new AbortController();
+    const { startGateway } = await import('../src/gateway.js');
+    const infoLogs: string[] = [];
+    const fileBytes = Buffer.from('torrent-ish-bytes');
+    const fileUrl = 'https://njc-download.ftn.qq.com/ftn_handler/example/?fname=';
+    getMessageMock.mockResolvedValueOnce({
+      status: 'ok',
+      retcode: 0,
+      data: {
+        self_id: 3569793910,
+        user_id: 1987460907,
+        message_id: 1221778744,
+        message_type: 'group',
+        group_id: 1084249155,
+        sender: { user_id: 1987460907, nickname: 'Alex Eisie' },
+        message: [
+          {
+            type: 'file',
+            data: {
+              file: 'RV.There.Yet.v1.2.17120.torrent',
+              file_id: '/7267fb83-5e31-4544-b96a-5f9ea9b6f51c',
+              file_size: String(fileBytes.length),
+              url: fileUrl,
+            },
+          },
+        ],
+      },
+    });
+    outboundMockState.getFileResult = {
+      status: 'ok',
+      retcode: 0,
+      data: {
+        file: '/app/.config/QQ/NapCat/temp/RV.There.Yet.v1.2.17120.torrent',
+        url: '/app/.config/QQ/NapCat/temp/RV.There.Yet.v1.2.17120.torrent',
+        file_size: String(fileBytes.length),
+        file_name: 'RV.There.Yet.v1.2.17120.torrent',
+      },
+    };
+    outboundMockState.getGroupFileUrlResult = {
+      status: 'ok',
+      retcode: 0,
+      data: { url: fileUrl },
+    };
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ 'content-length': String(fileBytes.length) }),
+      arrayBuffer: async () => fileBytes.buffer.slice(
+        fileBytes.byteOffset,
+        fileBytes.byteOffset + fileBytes.byteLength,
+      ),
+    })) as any;
+
+    let readyResolve!: () => void;
+    const readyP = new Promise<void>((r) => (readyResolve = r));
+
+    const runP = startGateway({
+      account: {
+        accountId: 'default',
+        enabled: true,
+        wsUrl: wsServer.wsUrl,
+        httpUrl: 'http://x',
+        groupAutoReact: false,
+        groupAutoReactEmojiId: 1,
+        config: {},
+      },
+      abortSignal: ac.signal,
+      cfg: {},
+      onReady: () => readyResolve(),
+      log: { info: (msg) => infoLogs.push(msg), error: () => {}, debug: () => {} },
+    });
+
+    await readyP;
+
+    try {
+      wsServer.sendToAll({
+        post_type: 'message',
+        message_type: 'group',
+        sub_type: 'normal',
+        message_id: 121,
+        user_id: 1987460907,
+        group_id: 1084249155,
+        message: [
+          { type: 'reply', data: { id: 1221778744 } },
+          { type: 'at', data: { qq: '3569793910' } },
+          { type: 'text', data: { text: ' 你能读取该文件吗' } },
+        ],
+        raw_message: '[CQ:reply,id=1221778744][CQ:at,qq=3569793910] 你能读取该文件吗',
+        sender: { user_id: 1987460907, nickname: 'Alex Eisie', role: 'owner' },
+        self_id: 3569793910,
+        time: Math.floor(Date.now() / 1000),
+      });
+
+      await vi.waitFor(() => {
+        expect(runtimeState.state.lastFinalizeArgs).not.toBeNull();
+      }, WAIT_FOR_BATCH);
+
+      expect(getMessageMock).toHaveBeenCalledWith(expect.anything(), 1221778744);
+      expect(outboundCalls.some((call) => call.kind === 'getFile')).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledWith(fileUrl, expect.any(Object));
+      const mediaPath = runtimeState.state.lastFinalizeArgs.MediaPath;
+      expect(mediaPath).toMatch(/RV\.There\.Yet\.v1\.2\.17120\.torrent$/);
+      expect(await readFile(mediaPath)).toEqual(fileBytes);
+      expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe(fileUrl);
+      expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('application/x-bittorrent');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain('[File: RV.There.Yet.v1.2.17120.torrent');
+      expect(runtimeState.state.lastDispatchArgs.ctx.BodyForAgent).toContain(`[File local path: ${mediaPath}]`);
+      expect(infoLogs.some((msg) => msg.includes('OpenClaw source text:') && msg.includes('RV.There.Yet.v1.2.17120.torrent'))).toBe(true);
     } finally {
       ac.abort();
       await runP;
@@ -791,6 +958,10 @@ describe('gateway', () => {
     const wavPath = join(mediaDir, 'voice.wav');
     await writeFile(mp3Path, Buffer.from('mock-mp3'));
     await writeFile(wavPath, Buffer.from('mock-wav'));
+    const oldFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('network disabled in test');
+    }) as any;
 
     const wsServer = await startMockOneBotWsServer();
     const ac = new AbortController();
@@ -837,8 +1008,11 @@ describe('gateway', () => {
     }, WAIT_FOR_BATCH);
 
     expect(runtimeState.state.lastEnvelopeArgs.body).toContain('[Image: http://img.local/test.png]');
+    expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).toContain('[Image attached]');
+    expect(runtimeState.state.lastFinalizeArgs.BodyForAgent).not.toContain('http://img.local/test.png');
     expect(runtimeState.state.lastEnvelopeArgs.body).toContain('<media:audio>');
-    expect(runtimeState.state.lastFinalizeArgs.MediaPath).toBe(mp3Path);
+    expect((globalThis.fetch as any).mock.calls[0]?.[0]).toBe('http://img.local/test.png');
+    expect(runtimeState.state.lastFinalizeArgs.MediaPath).toBeUndefined();
     expect(runtimeState.state.lastFinalizeArgs.MediaPaths).toBeUndefined();
     expect(runtimeState.state.lastFinalizeArgs.MediaUrl).toBe('http://img.local/test.png');
     expect(runtimeState.state.lastFinalizeArgs.MediaType).toBe('image/png');
@@ -849,6 +1023,7 @@ describe('gateway', () => {
     await runP;
     await wsServer.close();
     await rm(mediaDir, { recursive: true, force: true });
+    globalThis.fetch = oldFetch;
   });
 
   it('falls back to text when audio reply delivery fails', async () => {

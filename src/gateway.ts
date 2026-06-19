@@ -11,6 +11,7 @@ import { getOneBotRuntime } from "./runtime.js";
 import { getMessage, reactToMessage, sendText as sendOutboundText, sendImage, sendRecord } from "./outbound.js";
 import { cleanupVoiceFiles, processVoiceSegments } from "./voice.js";
 import { loadFileAttachments } from "./inbound-file.js";
+import { stageInboundImageAttachments } from "./inbound-image.js";
 export {
   cleanupVoiceFiles,
   convertAmrToMp3,
@@ -58,6 +59,7 @@ export interface OneBotImageAttachment {
 export interface OneBotFileAttachment {
   name: string;
   source?: string;
+  localPath?: string;
   contentType: string;
   size?: number;
   text?: string;
@@ -66,12 +68,15 @@ export interface OneBotFileAttachment {
 interface InboundMediaEntry {
   source: string;
   type: string;
+  path?: string;
+  url?: string;
 }
 
 interface RepliedMessageContext {
   messageId: string;
   text?: string;
   imageAttachments: OneBotImageAttachment[];
+  fileAttachments: OneBotFileAttachment[];
 }
 
 function segmentString(value: unknown): string | undefined {
@@ -92,17 +97,6 @@ function formatVisibleMention(data: Record<string, unknown>): string {
   const label = qq === "all" ? "all members" : qq;
   const name = segmentString(data.name);
   return name ? `[mentioned user ${label} ${name}]` : `[mentioned user ${label}]`;
-}
-
-function inferImageMimeType(img: OneBotImageAttachment): string {
-  const source = (img.file ?? img.url ?? img.source).toLowerCase();
-  if (source.endsWith(".jpg") || source.endsWith(".jpeg")) return "image/jpeg";
-  if (source.endsWith(".webp")) return "image/webp";
-  if (source.endsWith(".gif")) return "image/gif";
-  if (source.endsWith(".bmp")) return "image/bmp";
-  if (source.endsWith(".heic")) return "image/heic";
-  if (source.endsWith(".heif")) return "image/heif";
-  return "image/png";
 }
 
 export function extractTextForEvent(event: OneBotMessageEvent): string {
@@ -127,6 +121,10 @@ function readMessageSegmentsFromApiResponse(result: OneBotApiResponse): OneBotMe
   return Array.isArray(data?.message) ? data.message as OneBotMessageSegment[] : [];
 }
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
 function formatRepliedMessageText(messageId: string, result: OneBotApiResponse, segments: OneBotMessageSegment[]): string | undefined {
   const text = extractText(segments).trim();
   if (!text) return undefined;
@@ -140,13 +138,13 @@ function formatRepliedMessageText(messageId: string, result: OneBotApiResponse, 
 
 async function loadRepliedMessageContexts(
   account: ResolvedOneBotAccount,
-  segments: OneBotMessageSegment[],
+  event: OneBotMessageEvent,
   log?: GatewayContext["log"],
 ): Promise<RepliedMessageContext[]> {
   const seen = new Set<string>();
   const contexts: RepliedMessageContext[] = [];
 
-  for (const messageId of extractReplyMessageIds(segments)) {
+  for (const messageId of extractReplyMessageIds(event.message)) {
     const dedupeKey = String(messageId);
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
@@ -154,10 +152,14 @@ async function loadRepliedMessageContexts(
     try {
       const result = await getMessage(account, messageId);
       const repliedSegments = readMessageSegmentsFromApiResponse(result);
+      const repliedEvent = buildRepliedMessageEvent(event, result, dedupeKey, repliedSegments);
       contexts.push({
         messageId: dedupeKey,
         text: formatRepliedMessageText(dedupeKey, result, repliedSegments),
         imageAttachments: extractImageAttachments(repliedSegments),
+        fileAttachments: repliedSegments.some((segment) => segment.type === "file")
+          ? await loadFileAttachments(account, repliedEvent, log)
+          : [],
       });
     } catch (err) {
       log?.debug?.(`[onebot:${account.accountId}] Failed to load replied message ${dedupeKey}: ${String(err)}`);
@@ -165,6 +167,38 @@ async function loadRepliedMessageContexts(
   }
 
   return contexts;
+}
+
+function buildRepliedMessageEvent(
+  parentEvent: OneBotMessageEvent,
+  result: OneBotApiResponse,
+  messageId: string,
+  segments: OneBotMessageSegment[],
+): OneBotMessageEvent {
+  const data = result.data && typeof result.data === "object"
+    ? result.data as Record<string, unknown>
+    : {};
+  const messageType = data.message_type === "private" || data.message_type === "group"
+    ? data.message_type
+    : parentEvent.message_type;
+  const groupId = Number(data.group_id ?? parentEvent.group_id);
+  const sender = data.sender && typeof data.sender === "object"
+    ? data.sender as OneBotMessageEvent["sender"]
+    : parentEvent.sender;
+
+  return {
+    post_type: "message",
+    message_type: messageType,
+    sub_type: segmentString(data.sub_type) ?? "normal",
+    message_id: Number(data.message_id ?? messageId) || parentEvent.message_id,
+    user_id: Number(data.user_id ?? sender.user_id ?? parentEvent.user_id) || parentEvent.user_id,
+    ...(messageType === "group" && Number.isFinite(groupId) ? { group_id: groupId } : {}),
+    message: segments,
+    raw_message: segmentString(data.raw_message) ?? "",
+    sender,
+    self_id: Number(data.self_id ?? parentEvent.self_id) || parentEvent.self_id,
+    time: Number(data.time ?? parentEvent.time) || parentEvent.time,
+  };
 }
 
 export function extractText(segments: OneBotMessageSegment[]): string {
@@ -463,33 +497,47 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         // Process voice segments → download, convert SILK, get local paths
         const voiceMedia = await processVoiceSegments(combinedRecordSegs, log);
         const voiceFilePaths = voiceMedia.map((v) => v.path);
+        const stagedImageAttachments = await stageInboundImageAttachments(combinedImageAttachments, log);
 
         // Build text body — images as placeholders, voice handled via MediaPath
         let attachmentInfo = "";
+        let agentAttachmentInfo = "";
         for (const img of combinedImageAttachments) {
           const suffix = img.summary ? ` ${img.summary}` : "";
           attachmentInfo += `\n[Image: ${img.source}${suffix}]`;
+          agentAttachmentInfo += `\n[Image attached${suffix}]`;
         }
         for (const video of combinedVideos) {
           attachmentInfo += `\n[Video: ${video}]`;
+          agentAttachmentInfo += `\n[Video attached]`;
         }
         for (const file of combinedFileAttachments) {
           const suffix = file.size != null ? ` ${file.size} bytes` : "";
           attachmentInfo += `\n[File: ${file.name}${suffix}]`;
+          agentAttachmentInfo += `\n[File: ${file.name}${suffix}]`;
+          const fileLocation = file.localPath ?? file.source;
+          if (fileLocation) {
+            attachmentInfo += `\n[File ${file.localPath ? "local path" : "source"}: ${fileLocation}]`;
+            agentAttachmentInfo += `\n[File ${file.localPath ? "local path" : "source"}: ${fileLocation}]`;
+          }
           if (file.text) {
             attachmentInfo += `\n${file.text}`;
+            agentAttachmentInfo += `\n${file.text}`;
           }
         }
         if (voiceMedia.length > 0) {
           attachmentInfo += "\n<media:audio>";
+          agentAttachmentInfo += "\n<media:audio>";
         } else if (combinedRecordSegs.length > 0) {
           // Voice download/conversion failed — add text placeholder
           attachmentInfo += "\n[语音]";
+          agentAttachmentInfo += "\n[语音]";
         }
 
         const textWithReplyContext = [combinedReplyContextText, combinedText].filter(Boolean).join("\n");
         const userContent = textWithReplyContext + attachmentInfo;
-        const agentBody = userContent.trim() ? userContent : combinedText;
+        const agentContent = textWithReplyContext + agentAttachmentInfo;
+        const agentBody = agentContent.trim() ? agentContent : combinedText;
 
         const body = pluginRuntime.channel.reply.formatInboundEnvelope({
           channel: "OneBot",
@@ -519,24 +567,44 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         // Build media payload for OpenClaw's unified media pipeline.
         const mediaEntries: InboundMediaEntry[] = [
-          ...combinedImageAttachments.map((img) => ({
-            source: img.url ?? img.file ?? img.source,
-            type: inferImageMimeType(img),
+          ...stagedImageAttachments.map((img) => ({
+            source: img.mediaSource,
+            type: img.contentType,
+            ...(img.localPath ? { path: img.localPath } : {}),
           })),
           ...combinedFileAttachments
             .filter((file): file is OneBotFileAttachment & { source: string } => Boolean(file.source))
-            .map((file) => ({ source: file.source, type: file.contentType })),
-          ...voiceMedia.map((v) => ({ source: v.path, type: v.contentType })),
+            .map((file) => ({
+              source: file.source,
+              type: file.contentType,
+              ...(file.localPath ? { path: file.localPath } : {}),
+              ...(isHttpUrl(file.source) ? { url: file.source } : {}),
+            })),
+          ...voiceMedia.map((v) => ({ source: v.path, type: v.contentType, path: v.path })),
         ].filter((entry) => entry.source);
         const mediaPayload: Record<string, unknown> = {};
         if (mediaEntries.length > 0) {
+          const mediaPaths = mediaEntries.every((entry) => Boolean(entry.path))
+            ? mediaEntries.map((entry) => entry.path).filter((entry): entry is string => Boolean(entry))
+            : [];
+          const mediaUrls = mediaEntries.map((entry) => entry.url ?? entry.source);
+          const mediaTypes = mediaEntries.map((entry) => entry.type);
           mediaPayload.MediaUrl = mediaEntries[0].source;
           mediaPayload.MediaType = mediaEntries[0].type;
-          mediaPayload.MediaUrls = mediaEntries.map((entry) => entry.source);
-          mediaPayload.MediaTypes = mediaEntries.map((entry) => entry.type);
-        }
-        if (voiceMedia.length > 0) {
-          mediaPayload.MediaPath = voiceMedia[0].path;
+          if (mediaEntries.length > 1) mediaPayload.MediaUrls = mediaUrls;
+          mediaPayload.MediaTypes = mediaTypes;
+          mediaPayload.mediaUrl = mediaEntries[0].source;
+          mediaPayload.mediaType = mediaEntries[0].type;
+          if (mediaEntries.length > 1) mediaPayload.mediaUrls = mediaUrls;
+          mediaPayload.mediaTypes = mediaTypes;
+          if (mediaPaths.length > 0) {
+            mediaPayload.MediaPath = mediaPaths[0];
+            mediaPayload.mediaPath = mediaPaths[0];
+            if (mediaPaths.length > 1) {
+              mediaPayload.MediaPaths = mediaPaths;
+              mediaPayload.mediaPaths = mediaPaths;
+            }
+          }
         }
 
         const ctxPayload = pluginRuntime.channel.reply.finalizeInboundContext({
@@ -762,7 +830,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const hasReply = event.message.some((seg) => seg.type === "reply");
         const hasFile = event.message.some((seg) => seg.type === "file");
         const replyContextsPromise = hasReply
-          ? loadRepliedMessageContexts(account, event.message, log)
+          ? loadRepliedMessageContexts(account, event, log)
           : Promise.resolve<RepliedMessageContext[]>([]);
         const fileAttachmentsPromise = hasFile
           ? loadFileAttachments(account, event, log)
@@ -771,6 +839,10 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const imageAttachments = [
           ...extractImageAttachments(event.message),
           ...replyContexts.flatMap((context) => context.imageAttachments),
+        ];
+        const combinedFileAttachments = [
+          ...fileAttachments,
+          ...replyContexts.flatMap((context) => context.fileAttachments),
         ];
         const replyContextText = replyContexts.map((context) => context.text).filter((text): text is string => Boolean(text));
         const images = imageAttachments.map((attachment) => attachment.source);
@@ -788,7 +860,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           replyContextText,
           images,
           imageAttachments,
-          fileAttachments,
+          fileAttachments: combinedFileAttachments,
           videos,
           recordSegments,
           receivedAt,

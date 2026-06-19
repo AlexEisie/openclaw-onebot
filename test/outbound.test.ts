@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildImageSegment,
+  buildVideoSegment,
   deleteMessage,
   getGroupFileUrl,
   getGroupInfo,
@@ -91,6 +92,30 @@ describe('outbound', () => {
     expect(String(url)).toMatch(/send_group_msg$/);
     const body = JSON.parse(init.body);
     expect(body.group_id).toBe(456);
+  });
+
+  it('sendText: converts CQ at codes to OneBot message segments', async () => {
+    (globalThis.fetch as any).mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ status: 'ok', retcode: 0, data: { message_id: 12 } }),
+    });
+
+    await sendText({
+      to: 'group:456',
+      text: '[CQ:at,qq=1987460907] 试一下，这样能艾特到你吗？',
+      account: mkAccount(),
+    });
+
+    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    expect(String(url)).toMatch(/send_group_msg$/);
+    const body = JSON.parse(init.body);
+    expect(body.group_id).toBe(456);
+    expect(body.message).toEqual([
+      { type: 'at', data: { qq: '1987460907' } },
+      { type: 'text', data: { text: ' 试一下，这样能艾特到你吗？' } },
+    ]);
   });
 
   it('sendText: handles API retcode failures', async () => {
@@ -216,6 +241,24 @@ describe('outbound', () => {
     expect(String(segment.data.file)).toMatch(/^file:\/\/\/shared\/openclaw\/images\//);
     const rel = String(segment.data.file).replace('file:///shared/', '');
     expect(readFileSync(join(sharedDir, rel), 'utf8')).toBe('image-bytes');
+  });
+
+  it('buildVideoSegment: stages local files into the container shared dir', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'onebot-video-segment-'));
+    const sharedDir = join(root, 'shared');
+    mkdirSync(sharedDir, { recursive: true });
+    const source = join(root, 'clip.mp4');
+    writeFileSync(source, 'video-bytes');
+
+    const segment = await buildVideoSegment(
+      mkAccount({ config: { sharedDir, containerSharedDir: '/shared' } as any }),
+      source,
+    );
+
+    expect(segment.type).toBe('video');
+    expect(String(segment.data.file)).toMatch(/^file:\/\/\/shared\/openclaw\/videos\//);
+    const rel = String(segment.data.file).replace('file:///shared/', '');
+    expect(readFileSync(join(sharedDir, rel), 'utf8')).toBe('video-bytes');
   });
 
   it('uploadFile: calls upload_group_file with file uri', async () => {

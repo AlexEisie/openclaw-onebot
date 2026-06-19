@@ -142,7 +142,7 @@ async function pruneStagedMedia(rootDir: string): Promise<void> {
 async function resolveNapCatMediaUri(
   account: ResolvedOneBotAccount,
   filePath: string,
-  kind: 'audio' | 'images' | 'files',
+  kind: 'audio' | 'images' | 'videos' | 'files',
 ): Promise<string> {
   const normalizedPath = stripFileScheme(filePath);
   const { sharedDir, containerSharedDir } = getSharedConfig(account);
@@ -186,11 +186,68 @@ async function resolveNapCatMediaUri(
   return toFileUri(posix.join(containerSharedDir, rel));
 }
 
+function decodeCqValue(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&#91;/g, '[')
+    .replace(/&#93;/g, ']')
+    .replace(/&#44;/g, ',');
+}
+
+function parseCqParams(raw: string): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (!raw) return params;
+
+  for (const entry of raw.replace(/^,/, '').split(',')) {
+    const eqIndex = entry.indexOf('=');
+    if (eqIndex <= 0) continue;
+    const key = entry.slice(0, eqIndex).trim();
+    const value = entry.slice(eqIndex + 1);
+    if (key) params[key] = decodeCqValue(value);
+  }
+
+  return params;
+}
+
+function appendTextSegment(segments: OneBotMessageSegment[], text: string): void {
+  if (text) segments.push({ type: 'text', data: { text } });
+}
+
+function cqMatchToSegment(type: string, params: Record<string, string>): OneBotMessageSegment | null {
+  if (type !== 'at') return null;
+
+  const qq = params.qq?.trim();
+  if (!qq || (!/^\d+$/.test(qq) && qq !== 'all')) return null;
+
+  return { type: 'at', data: { qq } };
+}
+
 function buildMessage(text: string): OneBotMessageSegment[] {
   const segments: OneBotMessageSegment[] = [];
+  const cqPattern = /\[CQ:([A-Za-z0-9_-]+)((?:,[^\]]*)?)\]/g;
+  let cursor = 0;
+  let matchedCq = false;
 
-  if (text.trim()) {
-    segments.push({ type: 'text', data: { text } });
+  for (const match of text.matchAll(cqPattern)) {
+    const matchText = match[0];
+    const index = match.index ?? 0;
+    appendTextSegment(segments, text.slice(cursor, index));
+
+    const segment = cqMatchToSegment(match[1], parseCqParams(match[2] ?? ''));
+    if (segment) {
+      segments.push(segment);
+      matchedCq = true;
+    } else {
+      appendTextSegment(segments, matchText);
+    }
+
+    cursor = index + matchText.length;
+  }
+
+  appendTextSegment(segments, text.slice(cursor));
+
+  if (!matchedCq) {
+    return text.trim() ? [{ type: 'text', data: { text } }] : [];
   }
 
   return segments;
@@ -228,6 +285,18 @@ export async function buildImageSegment(
     : await resolveNapCatMediaUri(account, source, 'images');
 
   return { type: 'image', data: { file: mediaUri } };
+}
+
+export async function buildVideoSegment(
+  account: ResolvedOneBotAccount,
+  filePathOrUrl: string,
+): Promise<OneBotMessageSegment> {
+  const source = filePathOrUrl.trim();
+  const mediaUri = isRemoteHttpUrl(source)
+    ? source
+    : await resolveNapCatMediaUri(account, source, 'videos');
+
+  return { type: 'video', data: { file: mediaUri } };
 }
 
 export async function deleteMessage(

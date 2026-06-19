@@ -6,6 +6,7 @@ import { getDefaultContainerSharedDir, getDefaultSharedDir } from "./env.js";
 import { listOneBotAccountIds, resolveOneBotAccount, applyOneBotAccountConfig } from "./config.js";
 import {
   buildImageSegment,
+  buildVideoSegment,
   deleteMessage,
   getFriendList,
   getGroupInfo,
@@ -292,7 +293,7 @@ export const onebotPlugin: ChannelPlugin<ResolvedOneBotAccount> = {
         mediaResult = await sendImage(account, target.type, target.id, mediaPath);
       } else if (VIDEO_EXTS.has(ext)) {
         mediaResult = await sendMessageSegments(account, target, [
-          { type: "video", data: { file: mediaPath.startsWith("file://") ? mediaPath : `file://${mediaPath}` } },
+          await buildVideoSegment(account, mediaPath),
         ]);
       } else {
         mediaResult = await uploadFile(account, target.type, target.id, mediaPath, basename(mediaPath));

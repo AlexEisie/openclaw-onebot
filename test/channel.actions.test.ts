@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   buildImageSegment,
+  buildVideoSegment,
   deleteMessage,
   getGroupInfo,
   getGroupList,
@@ -20,6 +21,7 @@ const {
   uploadFile,
 } = vi.hoisted(() => ({
   buildImageSegment: vi.fn(),
+  buildVideoSegment: vi.fn(),
   deleteMessage: vi.fn(),
   getGroupInfo: vi.fn(),
   getGroupList: vi.fn(),
@@ -40,6 +42,7 @@ const {
 
 vi.mock('../src/outbound.js', () => ({
   buildImageSegment,
+  buildVideoSegment,
   deleteMessage,
   getGroupInfo,
   getGroupList,
@@ -69,6 +72,7 @@ import { onebotPlugin } from '../src/channel.js';
 describe('channel actions', () => {
   beforeEach(() => {
     buildImageSegment.mockReset();
+    buildVideoSegment.mockReset();
     deleteMessage.mockReset();
     getGroupInfo.mockReset();
     getGroupList.mockReset();
@@ -87,6 +91,10 @@ describe('channel actions', () => {
     uploadFile.mockReset();
     buildImageSegment.mockImplementation(async (_account, source) => ({
       type: 'image',
+      data: { file: String(source).startsWith('http') ? source : `file://${source}` },
+    }));
+    buildVideoSegment.mockImplementation(async (_account, source) => ({
+      type: 'video',
       data: { file: String(source).startsWith('http') ? source : `file://${source}` },
     }));
   });
@@ -500,6 +508,10 @@ describe('channel actions', () => {
       expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
       { type: 'group', id: 77 },
       [{ type: 'video', data: { file: 'file:///tmp/reply.mp4' } }],
+    );
+    expect(buildVideoSegment).toHaveBeenCalledWith(
+      expect.objectContaining({ httpUrl: 'http://127.0.0.1:3001' }),
+      '/tmp/reply.mp4',
     );
     expect(result).toMatchObject({ channel: 'onebot', messageId: '102' });
   });
